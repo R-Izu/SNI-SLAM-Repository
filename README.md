@@ -1,69 +1,98 @@
-# SNI-SLAM: Semantic Neural Implicit SLAM
-Siting Zhu*, Guangming Wang*, Hermann Blum, Jiuming Liu, Liang Song, Marc Pollefeys, Hesheng Wang
+## SNI-SLAM: Semantic Neural Implicit SLAM
+Siting Zhu*, Guangming Wang*, Hermann Blum, Jiuming Liu, Liang Song, Marc Pollefeys, Hesheng Wang  
 <div align="center">
-  <h3>CVPR 2024 [<a href="https://arxiv.org/pdf/2311.11016.pdf">Paper</a>] [<a href="https://drive.google.com/file/d/1oRKoly8cxple0Z3CcgbBvC_8wYQhOtR3/view?usp=drive_link">Suppl</a>]</h3>
+  <h3>CVPR 2024 [<a href="https://arxiv.org/pdf/2311.11016.pdf">論文</a>] [<a href="https://drive.google.com/file/d/1oRKoly8cxple0Z3CcgbBvC_8wYQhOtR3/view?usp=drive_link">補足資料</a>]</h3>
 </div>
 
-## Demo
+## デモ
 
 <p align="center">
   <a href="">
-    <img src="./demo/sem_mapping.gif" alt="Logo" width="80%">
+    <img src="./demo/sem_mapping.gif" alt="SNI-SLAM Demo" width="80%">
   </a>
 </p>
 
-## Installation
+## インストール
 
-First you have to make sure that you have all dependencies in place.
-The simplest way to do so, is to use [anaconda](https://www.anaconda.com/). 
+まず必要な依存関係をすべて満たしていることを確認してください。  
+最も簡単な方法は [anaconda](https://www.anaconda.com/) を利用することです。
 
-You can create an anaconda environment called `sni`. For linux, you need to install **libopenexr-dev** before creating the environment.
+Linux では、環境を作成する前に **libopenexr-dev** をインストールし、その後 `sni` という名前の conda 環境を作成します。
+
 ```bash
 sudo apt-get install libopenexr-dev
 conda env create -f environment.yaml
 conda activate sni
 ```
 
-## Run
-### Replica
-1. Download the data with semantic annotations in [google drive](https://drive.google.com/drive/u/0/folders/1BCu8bCGKG9HmnLFbyx7DIHI0slgkeo4h) and save the data into the `./data/replica` folder. We only provide a subset of Replica dataset. For all Replica data generation, please refer to directory `data_generation`. 
-2. Download the pretrained segmentation network in [google drive](https://drive.google.com/drive/u/0/folders/1BCu8bCGKG9HmnLFbyx7DIHI0slgkeo4h) and save it into the `./seg` folder (unzip `seg/facebookresearch_dinov2_main.zip`),
-and you can run SNI-SLAM:
+## 実行方法
+
+### Replica データセット
+
+1. セマンティックラベル付きの Replica データを  
+   [Google Drive](https://drive.google.com/drive/u/0/folders/1BCu8bCGKG9HmnLFbyx7DIHI0slgkeo4h) からダウンロードし、`./data/replica` フォルダに配置します。  
+   このリポジトリでは Replica データセットの一部のみを提供しています。  
+   完全な Replica データ生成手順については、`data_generation` ディレクトリを参照してください。
+
+2. 学習済みセグメンテーションネットワークを  
+   [Google Drive](https://drive.google.com/drive/u/0/folders/1BCu8bCGKG9HmnLFbyx7DIHI0slgkeo4h) からダウンロードし、`./seg` フォルダに保存します  
+   （`seg/facebookresearch_dinov2_main.zip` を展開して配置）。
+
+3. SNI-SLAM を以下のコマンドで実行します。
+
 ```bash
 python -W ignore run.py configs/Replica/room1.yaml
 ```
-The mesh for evaluation is saved as `$OUTPUT_FOLDER/mesh/final_mesh_eval_rec_culled.ply`
 
+評価用のメッシュは  
+`$OUTPUT_FOLDER/mesh/final_mesh_eval_rec_culled.ply`  
+として保存されます。
 
-## Evaluation
+## 評価
 
-### Average Trajectory Error
-To evaluate the average trajectory error. Run the command below with the corresponding config file:
+### 平均軌跡誤差（Average Trajectory Error）
+
+平均軌跡誤差を評価するには、対象シーンに対応する config ファイルを指定して以下を実行します。
+
 ```bash
-# An example for room1 of Replica
+# Replica の room1 の例
 python src/tools/eval_ate.py configs/Replica/room1.yaml
 ```
-### Reconstruction Metrics
-We follow [code](https://github.com/JingwenWang95/neural_slam_eval) for reconstruction evaluation.
 
-## Visualizing SNI-SLAM Results
-For visualizing the results, we recommend to set `mesh_freq: 40` in [configs/SNI-SLAM.yaml](configs/SNI-SLAM.yaml) and run SNI-SLAM from scratch.
+### 再構成精度（Reconstruction Metrics）
 
-After SNI-SLAM is trained, run the following command for visualization.
+再構成の評価には、以下のコードをベースにしたスクリプトを利用しています。  
+[neural_slam_eval](https://github.com/JingwenWang95/neural_slam_eval)
+
+## SNI-SLAM の結果の可視化
+
+SNI-SLAM の結果を可視化するには、  
+`configs/SNI-SLAM.yaml` 内の `mesh_freq` を `40` に設定し、最初から SNI-SLAM を再実行することを推奨します。
+
+学習完了後、以下のコマンドで可視化を行います。
 
 ```bash
 python visualizer.py configs/Replica/room1.yaml --top_view --save_rendering
 ```
-The result of the visualization will be saved at `output/Replica/room1/vis.mp4`. The green trajectory indicates the ground truth trajectory, and the red one is the trajectory of SNI-SLAM.
 
-### Visualizer Command line arguments
-- `--output $OUTPUT_FOLDER` output folder (overwrite the output folder in the config file)
-- `--top_view` set the camera to top view. Otherwise, the camera is set to the first frame of the sequence
-- `--save_rendering` save rendering video to `vis.mp4` in the output folder
-- `--no_gt_traj` do not show ground truth trajectory
+可視化結果の動画は `output/Replica/room1/vis.mp4` に保存されます。  
+緑の軌跡が真値（Ground Truth）の軌跡、赤の軌跡が SNI-SLAM による推定軌跡を表します。
 
-## Citing
-If you find our code or paper useful, please consider citing:
+### Visualizer のコマンドライン引数
+
+- `--output $OUTPUT_FOLDER`  
+  出力フォルダを指定します（config ファイルの設定を上書き）。
+- `--top_view`  
+  カメラをトップビューに設定します。指定しない場合は、シーケンスの最初のフレームから見た視点になります。
+- `--save_rendering`  
+  レンダリングした動画を `vis.mp4` として出力フォルダに保存します。
+- `--no_gt_traj`  
+  真値の軌跡を描画しないようにします。
+
+## 論文の引用
+
+本コードや論文が有用であれば、以下の BibTeX を用いて引用してください。
+
 ```BibTeX
 @inproceedings{zhu2024sni,
   title={Sni-slam: Semantic neural implicit slam},
