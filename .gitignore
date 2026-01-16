@@ -1,0 +1,49 @@
+# データセット（既存）
+data/
+ignore/
+
+# 出力・結果
+output/
+*.ply
+*.pth
+*.ckpt
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 学習済みモデル
+seg/
+
+# 環境・設定
+.env
+.venv
+env/
+venv/
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# 一時ファイル
+*.tmp
+*.bak
