@@ -38,6 +38,7 @@ class Mapper(object):
         self.mapping_idx = sni.mapping_idx
         self.mapping_cnt = sni.mapping_cnt
         self.decoders = sni.shared_decoders
+        self.shared_decoders = sni.shared_decoders  # 共有メモリへの参照を保持
 
         self.planes_xy = sni.shared_planes_xy
         self.planes_xz = sni.shared_planes_xz
@@ -418,6 +419,24 @@ class Mapper(object):
                 else:
                     cur_c2w = optimized_c2ws[-1]
 
+        # Fix: 最適化後のdecodersとplanesをCPUに戻して共有メモリを更新
+        # Trackerが共有メモリから読み取る際にCPU上のテンソルを取得できるようにする
+        
+        # decodersの状態を共有メモリに戻す（各パラメータをdetachしてCPUに転送）
+        self.shared_decoders.load_state_dict({k: v.detach().cpu() for k, v in self.decoders.state_dict().items()})
+        
+        # planesをCPUに戻す
+        for i in range(len(self.planes_xy)):
+            self.planes_xy[i] = self.planes_xy[i].detach().cpu()
+            self.planes_xz[i] = self.planes_xz[i].detach().cpu()
+            self.planes_yz[i] = self.planes_yz[i].detach().cpu()
+            self.c_planes_xy[i] = self.c_planes_xy[i].detach().cpu()
+            self.c_planes_xz[i] = self.c_planes_xz[i].detach().cpu()
+            self.c_planes_yz[i] = self.c_planes_yz[i].detach().cpu()
+            self.s_planes_xy[i] = self.s_planes_xy[i].detach().cpu()
+            self.s_planes_xz[i] = self.s_planes_xz[i].detach().cpu()
+            self.s_planes_yz[i] = self.s_planes_yz[i].detach().cpu()
+
         return cur_c2w
 
     def add_noise(self, gt_sem_label, noise_ratio):
@@ -434,7 +453,8 @@ class Mapper(object):
     def run(self):
         cfg = self.cfg
 
-        # Fix: CPU上にある共有メモリのdecodersとplanesをGPUに転送
+        # Fix: CPU上にある共有メモリのdecodersをGPUに転送（新しいオブジェクトが返される）
+        # 共有メモリへの参照はself.shared_decodersに保持
         self.decoders = self.decoders.to(self.device)
         
         all_planes = (

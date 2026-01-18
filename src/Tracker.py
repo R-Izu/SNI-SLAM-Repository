@@ -226,25 +226,31 @@ class Tracker(object):
             # if self.verbose:
             #     print('Tracking: update the parameters from mapping')
 
+            # Fix: CPU上にある共有メモリからロードする際、GPUに転送
+            device = self.device
             self.decoders.load_state_dict(self.shared_decoders.state_dict())
+            self.decoders = self.decoders.to(device)
 
             for planes, self_planes in zip(
                     [self.shared_planes_xy, self.shared_planes_xz, self.shared_planes_yz],
                     [self.planes_xy, self.planes_xz, self.planes_yz]):
                 for i, plane in enumerate(planes):
-                    self_planes[i] = plane.detach()
+                    # Fix: CPU上にある共有メモリのplaneをGPUに転送
+                    self_planes[i] = plane.detach().to(device)
 
             for c_planes, self_c_planes in zip(
                     [self.shared_c_planes_xy, self.shared_c_planes_xz, self.shared_c_planes_yz],
                     [self.c_planes_xy, self.c_planes_xz, self.c_planes_yz]):
                 for i, c_plane in enumerate(c_planes):
-                    self_c_planes[i] = c_plane.detach()
+                    # Fix: CPU上にある共有メモリのc_planeをGPUに転送
+                    self_c_planes[i] = c_plane.detach().to(device)
 
             for s_planes, self_s_planes in zip(
                     [self.shared_s_planes_xy, self.shared_s_planes_xz, self.shared_s_planes_yz],
                     [self.s_planes_xy, self.s_planes_xz, self.s_planes_yz]):
                 for i, s_plane in enumerate(s_planes):
-                    self_s_planes[i] = s_plane.detach()
+                    # Fix: CPU上にある共有メモリのs_planeをGPUに転送
+                    self_s_planes[i] = s_plane.detach().to(device)
 
             self.prev_mapping_idx = self.mapping_idx[0].clone()
 
