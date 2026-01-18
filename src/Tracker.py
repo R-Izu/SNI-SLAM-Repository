@@ -251,6 +251,21 @@ class Tracker(object):
     def run(self):
         device = self.device
 
+        # Fix: CPU上にある共有メモリのdecodersとplanesをGPUに転送
+        self.decoders = self.decoders.to(device)
+        
+        # Fix: CPU上にある共有メモリのplanesをGPUに転送
+        for i in range(len(self.planes_xy)):
+            self.planes_xy[i] = self.planes_xy[i].to(device)
+            self.planes_xz[i] = self.planes_xz[i].to(device)
+            self.planes_yz[i] = self.planes_yz[i].to(device)
+            self.c_planes_xy[i] = self.c_planes_xy[i].to(device)
+            self.c_planes_xz[i] = self.c_planes_xz[i].to(device)
+            self.c_planes_yz[i] = self.c_planes_yz[i].to(device)
+            self.s_planes_xy[i] = self.s_planes_xy[i].to(device)
+            self.s_planes_xz[i] = self.s_planes_xz[i].to(device)
+            self.s_planes_yz[i] = self.s_planes_yz[i].to(device)
+        
         all_planes = (self.planes_xy, self.planes_xz, self.planes_yz,
                       self.c_planes_xy, self.c_planes_xz, self.c_planes_yz,
                       self.s_planes_xy, self.s_planes_xz, self.s_planes_yz)
