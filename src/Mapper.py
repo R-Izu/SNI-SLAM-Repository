@@ -246,21 +246,24 @@ class Mapper(object):
         planes_para = []
         for planes in [self.planes_xy, self.planes_xz, self.planes_yz]:
             for i, plane in enumerate(planes):
-                plane = nn.Parameter(plane)
+                # Fix: CPU上にある共有メモリのplaneをGPUに転送
+                plane = nn.Parameter(plane.to(device))
                 planes_para.append(plane)
                 planes[i] = plane
 
         c_planes_para = []
         for c_planes in [self.c_planes_xy, self.c_planes_xz, self.c_planes_yz]:
             for i, c_plane in enumerate(c_planes):
-                c_plane = nn.Parameter(c_plane)
+                # Fix: CPU上にある共有メモリのc_planeをGPUに転送
+                c_plane = nn.Parameter(c_plane.to(device))
                 c_planes_para.append(c_plane)
                 c_planes[i] = c_plane
 
         s_planes_para = []
         for s_planes in [self.s_planes_xy, self.s_planes_xz, self.s_planes_yz]:
             for i, s_plane in enumerate(s_planes):
-                s_plane = nn.Parameter(s_plane)
+                # Fix: CPU上にある共有メモリのs_planeをGPUに転送
+                s_plane = nn.Parameter(s_plane.to(device))
                 s_planes_para.append(s_plane)
                 s_planes[i] = s_plane
 
@@ -431,6 +434,9 @@ class Mapper(object):
     def run(self):
         cfg = self.cfg
 
+        # Fix: CPU上にある共有メモリのdecodersとplanesをGPUに転送
+        self.decoders = self.decoders.to(self.device)
+        
         all_planes = (
             self.planes_xy, self.planes_xz, self.planes_yz,
             self.c_planes_xy, self.c_planes_xz, self.c_planes_yz,
@@ -440,7 +446,7 @@ class Mapper(object):
         data_iterator = iter(self.frame_loader)
 
         ## Fixing the first camera pose
-        self.estimate_c2w_list[0] = gt_c2w
+        self.estimate_c2w_list[0] = gt_c2w.cpu()
 
         init_phase = True
         prev_idx = -1
