@@ -179,7 +179,8 @@ class Mapper(object):
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [num_rays, num_samples, 3]
         pts = pts.reshape(1, -1, 3)
 
-        keyframes_c2ws = torch.stack([self.estimate_c2w_list[idx] for idx in self.keyframe_list], dim=0)
+        # Fix: CPU上にある共有メモリのestimate_c2w_listをGPUに転送
+        keyframes_c2ws = torch.stack([self.estimate_c2w_list[idx].to(device) for idx in self.keyframe_list], dim=0)
         w2cs = torch.inverse(keyframes_c2ws[:-2])     ## The last two keyframes are already included
 
         ones = torch.ones_like(pts[..., 0], device=device).reshape(1, -1, 1)
@@ -219,6 +220,9 @@ class Mapper(object):
         H, W, fx, fy, cx, cy = self.H, self.W, self.fx, self.fy, self.cx, self.cy
         cfg = self.cfg
         device = self.device
+
+        # Fix: CPU上にある共有メモリのcur_c2wをGPUに転送
+        cur_c2w = cur_c2w.to(device)
 
         if len(keyframe_dict) == 0:
             optimize_frame = []
@@ -268,12 +272,14 @@ class Mapper(object):
             if frame != -1:
                 gt_depths.append(keyframe_dict[frame]['depth'].to(device))
                 gt_colors.append(keyframe_dict[frame]['color'].to(device))
-                c2ws.append(keyframe_dict[frame]['est_c2w'])
-                gt_c2ws.append(keyframe_dict[frame]['gt_c2w'])
+                # Fix: keyframe_dict内のest_c2wはCPU上にあるため、GPUに転送
+                c2ws.append(keyframe_dict[frame]['est_c2w'].to(device))
+                gt_c2ws.append(keyframe_dict[frame]['gt_c2w'].to(device))
 
             else:
                 gt_depths.append(cur_gt_depth)
                 gt_colors.append(cur_gt_color)
+                # cur_c2wは既にGPU上にある（optimize_mappingの最初で転送済み）
                 c2ws.append(cur_c2w)
                 gt_c2ws.append(gt_cur_c2w)
 
@@ -403,7 +409,8 @@ class Mapper(object):
             camera_tensor_id = 0
             for frame in optimize_frame[1:]:
                 if frame != -1:
-                    keyframe_dict[frame]['est_c2w'] = optimized_c2ws[camera_tensor_id]
+                    # Fix: keyframe_dictに保存する前にCPUに転送（使用時にGPUに転送される）
+                    keyframe_dict[frame]['est_c2w'] = optimized_c2ws[camera_tensor_id].cpu().clone()
                     camera_tensor_id += 1
                 else:
                     cur_c2w = optimized_c2ws[-1]
@@ -485,7 +492,8 @@ class Mapper(object):
                                             self.keyframe_dict, self.keyframe_list, cur_c2w)
 
             if self.joint_opt:
-                self.estimate_c2w_list[idx] = cur_c2w
+                # Fix: 共有メモリテンソルはCPU上にあるため、CPUに転送してから保存
+                self.estimate_c2w_list[idx] = cur_c2w.cpu().clone()
 
             # add new frame to keyframe set
             if idx % self.keyframe_every == 0:
@@ -496,7 +504,8 @@ class Mapper(object):
                     'idx': idx,
                     'color': gt_color.to(self.keyframe_device),
                     'depth': gt_depth.to(self.keyframe_device),
-                    'est_c2w': cur_c2w.clone(),
+                    # Fix: keyframe_dictに保存する前にCPUに転送（使用時にGPUに転送される）
+                    'est_c2w': cur_c2w.cpu().clone(),
                 }
                 frame_dict['sem_feat'] = sem_feat.to(self.feature_device)
                 frame_dict['gt_sem_label'] = gt_sem_label.to(self.feature_device)

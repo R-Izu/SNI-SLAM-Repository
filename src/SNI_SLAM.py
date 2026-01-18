@@ -67,47 +67,55 @@ class SNI_SLAM():
 
         self.frame_reader = get_dataset(cfg, args, self.scale)
         self.n_img = len(self.frame_reader)
-        self.estimate_c2w_list = torch.zeros((self.n_img, 4, 4), device=self.device)
+        # Fix: CPU上で作成してから共有メモリに配置（spawnメソッドではCUDAテンソルを共有できない）
+        self.estimate_c2w_list = torch.zeros((self.n_img, 4, 4), device='cpu')
         self.estimate_c2w_list.share_memory_()
 
-        self.gt_c2w_list = (torch.zeros
-                            ((self.n_img, 4, 4)))
+        # Fix: CPU上で作成してから共有メモリに配置
+        self.gt_c2w_list = torch.zeros((self.n_img, 4, 4), device='cpu')
         self.gt_c2w_list.share_memory_()
-        self.idx = torch.zeros((1)).int()
+        # Fix: インデックス用テンソルもCPU上で作成
+        self.idx = torch.zeros((1), device='cpu').int()
         self.idx.share_memory_()
-        self.mapping_first_frame = torch.zeros((1)).int()
+        self.mapping_first_frame = torch.zeros((1), device='cpu').int()
         self.mapping_first_frame.share_memory_()
 
         # the id of the newest frame Mapper is processing
-        self.mapping_idx = torch.zeros((1)).int()
+        self.mapping_idx = torch.zeros((1), device='cpu').int()
         self.mapping_idx.share_memory_()
-        self.mapping_cnt = torch.zeros((1)).int()  # counter for mapping
+        self.mapping_cnt = torch.zeros((1), device='cpu').int()  # counter for mapping
         self.mapping_cnt.share_memory_()
 
-        ## Moving feature planes and decoders to the processing device
+        ## Fix: Feature planesをCPU上で共有メモリに配置（GPUに移動しない）
+        # spawnメソッドではCUDAテンソルを共有メモリに配置できないため、CPU上で共有
         for shared_planes in [self.shared_planes_xy, self.shared_planes_xz, self.shared_planes_yz]:
             for i, plane in enumerate(shared_planes):
-                plane = plane.to(self.device)
+                # CPU上で共有メモリに配置
+                plane = plane.cpu()
                 plane.share_memory_()
                 shared_planes[i] = plane
 
         for shared_c_planes in [self.shared_c_planes_xy, self.shared_c_planes_xz, self.shared_c_planes_yz]:
             for i, plane in enumerate(shared_c_planes):
-                plane = plane.to(self.device)
+                plane = plane.cpu()
                 plane.share_memory_()
                 shared_c_planes[i] = plane
 
         for shared_s_planes in [self.shared_s_planes_xy, self.shared_s_planes_xz, self.shared_s_planes_yz]:
             for i, plane in enumerate(shared_s_planes):
-                plane = plane.to(self.device)
+                plane = plane.cpu()
                 plane.share_memory_()
                 shared_s_planes[i] = plane
 
-        self.shared_decoders = self.shared_decoders.to(self.device)
+        # Fix: DecodersもCPU上で共有メモリに配置
+        # 各プロセス内で使用する際にGPUに転送する必要がある
+        self.shared_decoders = self.shared_decoders.cpu()
         self.shared_decoders.share_memory()
 
-        self.model_manager = ModelManager(cfg)
-        self.model_manager.get_share_memory()
+        # Fix: ModelManagerは親プロセスで作成しない
+        # ModelManager内のモデルはCUDA上にあるため、spawnメソッドでpickleできない
+        # 各プロセス（tracking/mapping）内で個別にModelManagerを作成する
+        self.model_manager = None  # プレースホルダー
 
         self.renderer = Renderer(cfg, self)
         self.mesher = Mesher(cfg, args, self)
@@ -237,7 +245,11 @@ class SNI_SLAM():
         Args:
             rank (int): Thread ID.
         """
-
+        # Fix: 各プロセスでModelManagerを個別に作成（spawnメソッドではCUDAテンソルを共有できない）
+        self.model_manager = ModelManager(self.cfg)
+        # Trackerのmodel_managerを更新
+        self.tracker.model_manager = self.model_manager
+        
         # should wait until the mapping of first frame is finished
         while True:
             if self.mapping_first_frame[0] == 1:
@@ -253,7 +265,11 @@ class SNI_SLAM():
         Args:
             rank (int): Thread ID.
         """
-
+        # Fix: 各プロセスでModelManagerを個別に作成（spawnメソッドではCUDAテンソルを共有できない）
+        self.model_manager = ModelManager(self.cfg)
+        # Mapperのmodel_managerを更新
+        self.mapper.model_manager = self.model_manager
+        
         self.mapper.run()
 
     def run(self):

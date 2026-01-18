@@ -32,7 +32,10 @@ class Renderer(object):
         self.n_importance = cfg['rendering']['n_importance']
 
         self.scale = cfg['scale']
-        self.bound = sni.bound.to(sni.device, non_blocking=True)
+        # Fix: CPU上でboundを保持（spawnメソッドではCUDAテンソルをpickleできない）
+        # 各プロセス内で使用する際にGPUに転送する
+        self.bound = sni.bound.cpu()
+        self.device = sni.device  # デバイス情報を保存
         self.model_manager = sni.model_manager
 
         self.enable_wandb = cfg['func']['enable_wandb']

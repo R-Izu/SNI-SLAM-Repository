@@ -284,7 +284,8 @@ class Tracker(object):
             else:
                 if self.const_speed_assumption and idx - 2 >= 0:
                     ## Linear prediction for initialization
-                    pre_poses = torch.stack([self.estimate_c2w_list[idx - 2], pre_c2w.squeeze(0)], dim=0)
+                    # Fix: CPU上にある共有メモリのestimate_c2w_listをGPUに転送
+                    pre_poses = torch.stack([self.estimate_c2w_list[idx - 2].to(device), pre_c2w.squeeze(0)], dim=0)
                     pre_poses = matrix_to_cam_pose(pre_poses)
                     cam_pose = 2 * pre_poses[1:] - pre_poses[0:1]
                 else:
@@ -311,7 +312,8 @@ class Tracker(object):
 
                 c2w = cam_pose_to_matrix(candidate_cam_pose)
 
-            self.estimate_c2w_list[idx] = c2w.squeeze(0).clone()
-            self.gt_c2w_list[idx] = gt_c2w.squeeze(0).clone()
+            # Fix: 共有メモリテンソルはCPU上にあるため、CPUに転送してから保存
+            self.estimate_c2w_list[idx] = c2w.squeeze(0).clone().cpu()
+            self.gt_c2w_list[idx] = gt_c2w.squeeze(0).clone().cpu()
             pre_c2w = c2w.clone()
             self.idx[0] = idx
