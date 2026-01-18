@@ -4,11 +4,11 @@ Siting Zhu*, Guangming Wang*, Hermann Blum, Jiuming Liu, Liang Song, Marc Pollef
   <h3>CVPR 2024 [<a href="https://arxiv.org/pdf/2311.11016.pdf">論文</a>] [<a href="https://drive.google.com/file/d/1oRKoly8cxple0Z3CcgbBvC_8wYQhOtR3/view?usp=drive_link">補足資料</a>]</h3>
 </div>
 
-## デモ
+## システムフロー
 
 <p align="center">
   <a href="">
-    <img src="./demo/sem_mapping.gif" alt="SNI-SLAM Demo" width="80%">
+    <img src="./demo/System_flow.png" alt="System flow" width="80%">
   </a>
 </p>
 
