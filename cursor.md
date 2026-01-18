@@ -17,26 +17,26 @@ graph TD
     %% Nodes
     subgraph Inputs
         RGBD[RGB-D Camera Stream]:::input
-        BIM_File[BIM Data File <br/>(IFC/OBJ)]:::input
+        BIM_File[BIM Data File <br>(IFC/OBJ)]:::input
     end
 
     subgraph SLAM_Core ["SLAM Core (SNI-SLAM)"]
-        Tracker[Tracking Module<br/>(Pose Estimation)]:::slam
-        Mapper[Mapping Module<br/>(Keyframe & Depth)]:::slam
+        Tracker[Tracking Module<br>(Pose Estimation)]:::slam
+        Mapper[Mapping Module<br>(Keyframe & Depth)]:::slam
     end
 
     subgraph Semantic_Proc ["Semantic Processing"]
-        DINO[DINOv2 Segmentation<br/>(src/networks/dinov2_seg.py)]:::sem
-        SemCloudGen[Semantic Point Cloud<br/>Generator]:::sem
+        DINO[DINOv2 Segmentation<br>(src/networks/dinov2_seg.py)]:::sem
+        SemCloudGen[Semantic Point Cloud<br>Generator]:::sem
     end
 
     subgraph Reg_System ["Registration & BIM"]
         BIMProc[BIM Processor]:::reg
-        RegMod[Registration Module<br/>(Semantic ICP)]:::reg
+        RegMod[Registration Module<br>(Semantic ICP)]:::reg
     end
 
     subgraph Visualization
-        Viewer[BIM Visualizer<br/>(visualizer_with_BIM.py)]:::vis
+        Viewer[BIM Visualizer<br>(visualizer_with_BIM.py)]:::vis
     end
 
     %% Data Flow
@@ -47,15 +47,15 @@ graph TD
     Mapper -->|Keyframe RGB| DINO
     Mapper -->|Keyframe Depth & Pose| SemCloudGen
     DINO -->|Semantic Mask| SemCloudGen
-    SemCloudGen -->|Local Semantic Point Cloud<br/>(SLAM Coords)| RegMod
+    SemCloudGen -->|Local Semantic Point Cloud<br>(SLAM Coords)| RegMod
 
     %% BIM Processing
     BIM_File --> BIMProc
-    BIMProc -->|Reference Semantic BIM Data<br/>(BIM Coords)| RegMod
+    BIMProc -->|Reference Semantic BIM Data<br>(BIM Coords)| RegMod
     BIMProc -->|BIM Geometry Model| Viewer
 
     %% Feedback Loop (Tight Coupling)
-    RegMod -->|Correction Transform &<br/>Drift Feedback| Tracker
+    RegMod -->|Correction Transform &<br>Drift Feedback| Tracker
 
     %% Visualization Flow
     RegMod -->|Correction Transform| Viewer
@@ -116,3 +116,61 @@ BIMデータ: 入力BIMデータはメッシュ（OBJ/PLY）またはラベル�
 [ ] visualizer_with_BIM.pyがBIMモデルと整列されたSLAM点群の両方を表示する。
 
 [ ] ベースラインSNI-SLAMと比較してドリフトが観察可能に減少している。
+
+```mermaid
+graph TD
+    %% Define Styles
+    classDef slam fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px;
+    classDef sem fill:#d5e8d4,stroke:#82b366,stroke-width:2px;
+    classDef reg fill:#ffe6cc,stroke:#d79b00,stroke-width:2px;
+    classDef vis fill:#e1d5e7,stroke:#9673a6,stroke-width:2px;
+    classDef input fill:#f5f5f5,stroke:#666666,stroke-width:1px;
+
+    %% Nodes
+    subgraph Inputs
+        RGBD[RGB-D Camera Stream]:::input
+        BIM_File["BIM Data File<br/>(IFC/OBJ)"]:::input
+    end
+
+    subgraph SLAM_Core ["SLAM Core (SNI-SLAM)"]
+        Tracker["Tracking Module<br/>(Pose Estimation)"]:::slam
+        Mapper["Mapping Module<br/>(Keyframe & Depth)"]:::slam
+    end
+
+    subgraph Semantic_Proc ["Semantic Processing"]
+        DINO["DINOv2 Segmentation<br/>(src/networks/dinov2_seg.py)"]:::sem
+        SemCloudGen["Semantic Point Cloud<br/>Generator"]:::sem
+    end
+
+    subgraph Reg_System ["Registration & BIM"]
+        BIMProc[BIM Processor]:::reg
+        RegMod["Registration Module<br/>(Semantic ICP)"]:::reg
+    end
+
+    subgraph Visualization
+        Viewer["BIM Visualizer<br/>(visualizer_with_BIM.py)"]:::vis
+    end
+
+    %% Data Flow
+    RGBD --> Tracker
+    Tracker -->|Current Pose Twc| Mapper
+    
+    %% Semantic Loop
+    Mapper -->|Keyframe RGB| DINO
+    Mapper -->|Keyframe Depth & Pose| SemCloudGen
+    DINO -->|Semantic Mask| SemCloudGen
+    SemCloudGen -->|"Local Semantic Point Cloud<br/>(SLAM Coords)"| RegMod
+
+    %% BIM Processing
+    BIM_File --> BIMProc
+    BIMProc -->|"Reference Semantic BIM Data<br/>(BIM Coords)"| RegMod
+    BIMProc -->|BIM Geometry Model| Viewer
+
+    %% Feedback Loop (Tight Coupling)
+    RegMod -->|"Correction Transform &<br/>Drift Feedback"| Tracker
+
+    %% Visualization Flow
+    RegMod -->|Correction Transform| Viewer
+    Tracker -->|Corrected Pose| Viewer
+    DINO -->|Global Point Cloud| Viewer
+```
