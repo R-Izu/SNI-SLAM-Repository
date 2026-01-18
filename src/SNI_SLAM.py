@@ -247,8 +247,10 @@ class SNI_SLAM():
         """
         # Fix: 各プロセスでModelManagerを個別に作成（spawnメソッドではCUDAテンソルを共有できない）
         self.model_manager = ModelManager(self.cfg)
-        # Trackerのmodel_managerを更新
+        # Tracker、Renderer、Mesherのmodel_managerを更新
         self.tracker.model_manager = self.model_manager
+        self.renderer.model_manager = self.model_manager
+        self.mesher.renderer.model_manager = self.model_manager
         
         # should wait until the mapping of first frame is finished
         while True:
@@ -267,8 +269,10 @@ class SNI_SLAM():
         """
         # Fix: 各プロセスでModelManagerを個別に作成（spawnメソッドではCUDAテンソルを共有できない）
         self.model_manager = ModelManager(self.cfg)
-        # Mapperのmodel_managerを更新
+        # Mapper、Renderer、Mesherのmodel_managerを更新
         self.mapper.model_manager = self.model_manager
+        self.renderer.model_manager = self.model_manager
+        self.mesher.renderer.model_manager = self.model_manager
         
         self.mapper.run()
 
