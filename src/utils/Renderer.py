@@ -63,6 +63,9 @@ class Renderer(object):
 
     def render_batch_ray(self, all_planes, decoders, rays_d, rays_o, device, truncation, gt_depth=None,
                         sem_feats=None, rgb_feats=None, return_emb=False):
+        # Fix: CPU上にあるboundをGPUに転送（使用時に必要）
+        bound_device = self.bound.to(device)
+        
         n_stratified = self.n_stratified
         n_importance = self.n_importance
         n_rays = rays_o.shape[0]
@@ -96,7 +99,7 @@ class Renderer(object):
                 rays_d_uni = rays_d[~gt_mask].detach()
                 det_rays_o = rays_o_uni.unsqueeze(-1)  # (N, 3, 1)
                 det_rays_d = rays_d_uni.unsqueeze(-1)  # (N, 3, 1)
-                t = (self.bound.unsqueeze(0) - det_rays_o)/det_rays_d  # (N, 3, 2)
+                t = (bound_device.unsqueeze(0) - det_rays_o)/det_rays_d  # (N, 3, 2)
                 far_bb, _ = torch.min(torch.max(t, dim=2)[0], dim=1)
                 far_bb = far_bb.unsqueeze(-1)
                 far_bb += 0.01
@@ -106,7 +109,7 @@ class Renderer(object):
                     z_vals_uni = self.perturbation(z_vals_uni)
                 pts_uni = rays_o_uni.unsqueeze(1) + rays_d_uni.unsqueeze(1) * z_vals_uni.unsqueeze(-1)
 
-                pts_uni_nor = normalize_3d_coordinate(pts_uni.clone(), self.bound)
+                pts_uni_nor = normalize_3d_coordinate(pts_uni.clone(), bound_device)
                 sdf_uni, _ = decoders.get_raw_sdf(pts_uni_nor, all_planes[:6])
                 sdf_uni = sdf_uni.reshape(*pts_uni.shape[0:2])
                 alpha_uni = self.sdf2alpha(sdf_uni, decoders.beta)
