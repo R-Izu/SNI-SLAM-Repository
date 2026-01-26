@@ -25,6 +25,7 @@ seg/
 # 環境・設定
 .env
 .venv
+.envrc
 env/
 venv/
 *.swp
@@ -47,3 +48,6 @@ Thumbs.db
 # 一時ファイル
 *.tmp
 *.bak
+
+Claude setting
+CLAUDE.md
