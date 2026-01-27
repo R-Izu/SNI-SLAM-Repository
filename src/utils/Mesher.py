@@ -202,6 +202,9 @@ class Mesher(object):
         """
 
         with torch.no_grad():
+            # Fix: all_planesは共有メモリでCPU上にあるため、decoders/pointsと同じdeviceへ転送
+            all_planes = tuple([p.to(device) for p in plane_list] for plane_list in all_planes)
+
             grid = self.get_grid_uniform(self.resolution)
             points = grid['grid_points']
             mesh_bound = self.get_bound_from_frames(keyframe_dict, self.scale)
