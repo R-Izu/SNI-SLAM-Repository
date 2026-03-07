@@ -245,19 +245,38 @@ class SNI_SLAM():
         Args:
             rank (int): Thread ID.
         """
+        import sys
+        print(f"[DEBUG Tracking] Process started, rank={rank}", flush=True)
+        print(f"[DEBUG Tracking] mapping_first_frame is_shared={self.mapping_first_frame.is_shared()}, val={self.mapping_first_frame[0].item()}", flush=True)
+
         # Fix: 各プロセスでModelManagerを個別に作成（spawnメソッドではCUDAテンソルを共有できない）
-        self.model_manager = ModelManager(self.cfg)
+        try:
+            print("[DEBUG Tracking] Creating ModelManager...", flush=True)
+            self.model_manager = ModelManager(self.cfg)
+            print("[DEBUG Tracking] ModelManager created successfully", flush=True)
+        except Exception as e:
+            print(f"[DEBUG Tracking] ModelManager creation FAILED: {e}", flush=True)
+            import traceback; traceback.print_exc(); sys.stdout.flush()
+            return
+
         # Tracker、Renderer、Mesherのmodel_managerを更新
         self.tracker.model_manager = self.model_manager
         self.renderer.model_manager = self.model_manager
         self.mesher.renderer.model_manager = self.model_manager
-        
+
         # should wait until the mapping of first frame is finished
+        print("[DEBUG Tracking] Waiting for mapping_first_frame...", flush=True)
+        wait_count = 0
         while True:
             if self.mapping_first_frame[0] == 1:
+                print(f"[DEBUG Tracking] mapping_first_frame=1 detected after {wait_count}s", flush=True)
                 break
+            wait_count += 1
+            if wait_count % 30 == 0:
+                print(f"[DEBUG Tracking] Still waiting... ({wait_count}s), val={self.mapping_first_frame[0].item()}", flush=True)
             time.sleep(1)
 
+        print("[DEBUG Tracking] Starting tracker.run()", flush=True)
         self.tracker.run()
 
     def mapping(self, rank):
@@ -267,13 +286,25 @@ class SNI_SLAM():
         Args:
             rank (int): Thread ID.
         """
+        print(f"[DEBUG Mapping] Process started, rank={rank}", flush=True)
+        print(f"[DEBUG Mapping] mapping_first_frame is_shared={self.mapping_first_frame.is_shared()}, val={self.mapping_first_frame[0].item()}", flush=True)
+
         # Fix: 各プロセスでModelManagerを個別に作成（spawnメソッドではCUDAテンソルを共有できない）
-        self.model_manager = ModelManager(self.cfg)
+        try:
+            print("[DEBUG Mapping] Creating ModelManager...", flush=True)
+            self.model_manager = ModelManager(self.cfg)
+            print("[DEBUG Mapping] ModelManager created successfully", flush=True)
+        except Exception as e:
+            print(f"[DEBUG Mapping] ModelManager creation FAILED: {e}", flush=True)
+            import traceback; traceback.print_exc(); import sys; sys.stdout.flush()
+            return
+
         # Mapper、Renderer、Mesherのmodel_managerを更新
         self.mapper.model_manager = self.model_manager
         self.renderer.model_manager = self.model_manager
         self.mesher.renderer.model_manager = self.model_manager
-        
+
+        print("[DEBUG Mapping] Starting mapper.run()", flush=True)
         self.mapper.run()
 
     def run(self):
