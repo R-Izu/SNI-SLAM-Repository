@@ -1,7 +1,12 @@
 inherit_from: configs/Replica/replica.yaml
+tracking:
+  vis_freq: 200          # デフォルト10000では2000フレームで可視化されない
 mapping:
   bound: [[-1.9,7.9],[-2.2,4.5],[-2.5,2.3]]
   marching_cubes_bound: [[-1.9,7.9],[-2.2,4.5],[-2.5,2.3]]
+  mesh_freq: 9999       # 途中のメッシュ生成を無効化（最終フレームのみ生成）
+meshing:
+  resolution: 0.02      # 0.01→0.02 (グリッド点数を1/8に削減)
 data:
   input_folder: data/replica/room_0_official/
-  output: output/Replica/room0_official/test
+  output: output/Replica/room0_official/260310_test4
