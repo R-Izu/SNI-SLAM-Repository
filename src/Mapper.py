@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 
 import os
 import time
+import shutil
 
 from src.common import (get_samples, random_select, matrix_to_cam_pose, cam_pose_to_matrix)
 from src.utils.datasets import get_dataset, SeqSampler
@@ -54,6 +55,25 @@ class Mapper(object):
         self.s_planes_xz = sni.shared_s_planes_xz
         self.s_planes_yz = sni.shared_s_planes_yz
 
+        # Bug 3 fix: 共有メモリテンソルへの参照を保持
+        # optimize_mapping中にリスト要素がGPU nn.Parameterで置き換えられるため、
+        # 元の共有メモリテンソルへの参照をここで保存しておく
+        self._shared_planes_refs = [
+            [t for t in sni.shared_planes_xy],
+            [t for t in sni.shared_planes_xz],
+            [t for t in sni.shared_planes_yz],
+        ]
+        self._shared_c_planes_refs = [
+            [t for t in sni.shared_c_planes_xy],
+            [t for t in sni.shared_c_planes_xz],
+            [t for t in sni.shared_c_planes_yz],
+        ]
+        self._shared_s_planes_refs = [
+            [t for t in sni.shared_s_planes_xy],
+            [t for t in sni.shared_s_planes_xz],
+            [t for t in sni.shared_s_planes_yz],
+        ]
+
         self.estimate_c2w_list = sni.estimate_c2w_list
         self.mapping_first_frame = sni.mapping_first_frame
 
@@ -96,6 +116,11 @@ class Mapper(object):
 
         self.keyframe_dict = []
         self.keyframe_list = []
+        # メモリ節約: sem_feat/gt_sem_labelをディスクにキャッシュし、RAMに保持しない
+        # 全500フレーム分をRAMに保持すると~13GB消費するが、optimize_mappingでは
+        # mapping_window_size=5しか使わないため、必要時にディスクからロードする
+        self._feat_cache_dir = os.path.join(self.output, 'feat_cache')
+        os.makedirs(self._feat_cache_dir, exist_ok=True)
         self.frame_reader = get_dataset(cfg, args, self.scale, device=self.device)
         self.n_img = len(self.frame_reader)
         self.frame_loader = DataLoader(self.frame_reader, batch_size=1, num_workers=1, pin_memory=True,
@@ -296,12 +321,13 @@ class Mapper(object):
         kf_gt_label = []
         for frame in optimize_frame:
             if frame != -1:
-                sem_feat = keyframe_dict[frame]['sem_feat'].to(device)
+                # ディスクキャッシュからsem_feat/gt_sem_labelをロード（float16→float32）
+                sem_feat = torch.load(keyframe_dict[frame]['sem_feat_path']).to(device).float()
                 rgb_feat = self.model_manager.head(sem_feat)
                 kf_sem_feats.append(sem_feat.squeeze(0))
                 kf_rgb_feats.append(rgb_feat.squeeze(0))
 
-                gt_sem_label = keyframe_dict[frame]['gt_sem_label'].to(device)
+                gt_sem_label = torch.load(keyframe_dict[frame]['gt_sem_label_path']).to(device).long()
                 kf_gt_label.append(gt_sem_label)
 
             else:
@@ -425,17 +451,29 @@ class Mapper(object):
         # decodersの状態を共有メモリに戻す（各パラメータをdetachしてCPUに転送）
         self.shared_decoders.load_state_dict({k: v.detach().cpu() for k, v in self.decoders.state_dict().items()})
         
-        # planesをCPUに戻す
-        for i in range(len(self.planes_xy)):
-            self.planes_xy[i] = self.planes_xy[i].detach().cpu()
-            self.planes_xz[i] = self.planes_xz[i].detach().cpu()
-            self.planes_yz[i] = self.planes_yz[i].detach().cpu()
-            self.c_planes_xy[i] = self.c_planes_xy[i].detach().cpu()
-            self.c_planes_xz[i] = self.c_planes_xz[i].detach().cpu()
-            self.c_planes_yz[i] = self.c_planes_yz[i].detach().cpu()
-            self.s_planes_xy[i] = self.s_planes_xy[i].detach().cpu()
-            self.s_planes_xz[i] = self.s_planes_xz[i].detach().cpu()
-            self.s_planes_yz[i] = self.s_planes_yz[i].detach().cpu()
+        # Bug 3 fix: 最適化後のplanesデータを共有メモリテンソルに書き戻す
+        # .data.copy_()で元の共有メモリテンソルの中身を更新し、リスト要素も共有メモリテンソルに戻す
+        # これによりTrackerプロセスが共有メモリ経由で最新のplanesを読み取れるようになる
+        for planes_list, refs in zip(
+                [self.planes_xy, self.planes_xz, self.planes_yz],
+                self._shared_planes_refs):
+            for i in range(len(planes_list)):
+                refs[i].data.copy_(planes_list[i].detach().cpu().data)
+                planes_list[i] = refs[i]
+
+        for c_planes_list, refs in zip(
+                [self.c_planes_xy, self.c_planes_xz, self.c_planes_yz],
+                self._shared_c_planes_refs):
+            for i in range(len(c_planes_list)):
+                refs[i].data.copy_(c_planes_list[i].detach().cpu().data)
+                c_planes_list[i] = refs[i]
+
+        for s_planes_list, refs in zip(
+                [self.s_planes_xy, self.s_planes_xz, self.s_planes_yz],
+                self._shared_s_planes_refs):
+            for i in range(len(s_planes_list)):
+                refs[i].data.copy_(s_planes_list[i].detach().cpu().data)
+                s_planes_list[i] = refs[i]
 
         return cur_c2w
 
@@ -526,15 +564,22 @@ class Mapper(object):
                 self.keyframe_list.append(idx)
 
                 frame_dict = {
-                    'gt_c2w': gt_c2w,
+                    'gt_c2w': gt_c2w.cpu().clone(),
                     'idx': idx,
                     'color': gt_color.to(self.keyframe_device),
                     'depth': gt_depth.to(self.keyframe_device),
                     # Fix: keyframe_dictに保存する前にCPUに転送（使用時にGPUに転送される）
                     'est_c2w': cur_c2w.cpu().clone(),
                 }
-                frame_dict['sem_feat'] = sem_feat.to(self.feature_device)
-                frame_dict['gt_sem_label'] = gt_sem_label.to(self.feature_device)
+                # メモリ節約: sem_feat/gt_sem_labelはディスクにキャッシュ（float16/int16で保存）
+                # keyframe_dictにはファイルパスのみ保持し、使用時にロードする
+                kf_idx = len(self.keyframe_list) - 1
+                feat_path = os.path.join(self._feat_cache_dir, f'sem_feat_{kf_idx:05d}.pt')
+                label_path = os.path.join(self._feat_cache_dir, f'sem_label_{kf_idx:05d}.pt')
+                torch.save(sem_feat.cpu().half(), feat_path)
+                torch.save(gt_sem_label.cpu().short(), label_path)
+                frame_dict['sem_feat_path'] = feat_path
+                frame_dict['gt_sem_label_path'] = label_path
 
                 self.keyframe_dict.append(frame_dict)
 
@@ -558,10 +603,11 @@ class Mapper(object):
             if idx == self.n_img-1:
                 mesh_out_semantic = f'{self.output}/mesh/final_mesh_semantic.ply'
                 mesh_out_color = f'{self.output}/mesh/final_mesh_color.ply'
-                self.mesher.get_mesh(mesh_out_color, all_planes, self.decoders, self.keyframe_dict, self.device, mesh_out_semantic=mesh_out_semantic, semantic=False)
+                self.mesher.get_mesh(mesh_out_color, all_planes, self.decoders, self.keyframe_dict, self.device, mesh_out_semantic=mesh_out_semantic, color=True, semantic=True)
                 cull_mesh(mesh_out_color, self.cfg, self.args, self.device, estimate_c2w_list=self.estimate_c2w_list)
 
-                break
+                # Bug 6 fix: ディスクキャッシュを削除
+                if os.path.exists(self._feat_cache_dir):
+                    shutil.rmtree(self._feat_cache_dir)
 
-            if idx == self.n_img-1:
                 break
