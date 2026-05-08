@@ -96,9 +96,11 @@ class BaseDataset(Dataset):
 
         semantic_path = self.semantic_paths[index]
         semantic = cv2.imread(semantic_path, cv2.IMREAD_UNCHANGED)
-        semantic_remap = semantic.copy()
+        semantic_remap = np.zeros_like(semantic)
         for i in range(self.num_semantic_class):
             semantic_remap[semantic == self.semantic_classes[i]] = i
+        # blinds(Replica ID=12) を window(index=4) に統合
+        semantic_remap[semantic == 12] = 4
         semantic_data = semantic_remap.astype(np.uint8)
         semantic = np.expand_dims(semantic_data, -1)
         semantic_data = torch.from_numpy(semantic)

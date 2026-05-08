@@ -40,7 +40,11 @@ class ModelManager:
 
     def get_dinov2(self):
         model = DINO2SEG(img_h=self.img_h, img_w=self.img_w, num_cls=self.n_classes, edge=self.crop_edge, dim=self.dim)
-        model.load_state_dict(torch.load(self.pretrained_model_path, map_location=self.device))
+        state_dict = torch.load(self.pretrained_model_path, map_location=self.device)
+        # Remove class-specific final conv weights when n_classes changed
+        for key in ['segmentation_conv.3.weight', 'segmentation_conv.3.bias']:
+            state_dict.pop(key, None)
+        model.load_state_dict(state_dict, strict=False)
         return model
 
     def set_mode_feature(self):
