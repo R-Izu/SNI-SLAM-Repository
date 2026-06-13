@@ -1,0 +1,12 @@
+# Experimental registration methods: try freely here, only the adopted best is
+# promoted to regbim/methods/proposed.py and committed. Everything else stays local.
+regbim/methods/experimental/*.py
+!regbim/methods/experimental/__init__.py
+
+# Generated artifacts (point clouds, evaluation CSV/figures, visualizations)
+output/
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,103 @@
+# Registration config — Replica room_0 (convenience check for the final IFC->pointcloud goal).
+# All tunable parameters live here (CLAUDE.md: config-driven). Paths are relative to repo root.
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+source:                       # the cloud we move (SLAM output, 6-class encoded in vertex color)
+  type: slam_mesh
+  mesh_path: output/Replica/room0_official/260310_test4/mesh/final_mesh_semantic.ply
+  n_points: 200000            # surface samples drawn from the mesh
+
+reference:                    # the "BIM-surrogate" cloud we align TO (stand-in for IFC->pointcloud)
+  type: replica_gt            # adapter selector; future: `ifc`
+  mesh_path: data/replica/room_0/habitat/mesh_semantic.ply
+  info_path: data/replica/room_0/habitat/info_semantic.json
+  n_points: 200000
+  # IFC has no furniture: keep only structural classes so the check matches the final scenario.
+  keep_classes: [wall, floor, ceiling, door, window]
+  gravity_dir_for_eval: [0.0036468247, 0.0030083838, -0.99998885]  # info_semantic.json; EVAL ONLY
+
+# ---------------------------------------------------------------------------
+# Class vocabulary (must match src/utils/Mesher.py:288 decode_segmap)
+# ---------------------------------------------------------------------------
+classes:
+  names: [background, wall, door, floor, window, ceiling]   # id = index 0..5
+  # SLAM vertex colors -> class id (RGB 0-255), identical to decode_segmap palette.
+  palette:
+    background: [128, 128, 128]
+    wall:       [255,  64,  64]
+    door:       [255, 200,  64]
+    floor:      [180, 220, 255]
+    window:     [ 64, 200, 255]
+    ceiling:    [200, 100, 255]
+  # Replica info_semantic.json class id -> our 6-class name. Unlisted -> background.
+  replica_to_six:
+    93: wall
+    37: door
+    40: floor
+    97: window
+    31: ceiling
+  structural: [wall, floor, ceiling]      # used by rotation estimation
+  match_classes: [wall, floor, ceiling, door, window]  # semantic-ICP correspondence (both sides)
+
+# ---------------------------------------------------------------------------
+# Preprocessing
+# ---------------------------------------------------------------------------
+preprocess:
+  voxel_size: 0.05            # metres (Replica is metric)
+  normal_radius: 0.15
+  normal_max_nn: 50
+
+# ---------------------------------------------------------------------------
+# Proposed method
+# ---------------------------------------------------------------------------
+rotation:
+  ransac_iters: 1000
+  ransac_normal_thresh_deg: 5.0   # inlier angular threshold for gravity fitting
+  yaw_bins: 360                   # histogram resolution for Manhattan yaw voting
+  yaw_use_kmeans: true            # k-means(4) cross-check of dominant horizontal directions
+
+semantic_icp:
+  max_iter: 50
+  max_corr_dist: 0.3              # metres; gating for class-wise nearest neighbour
+  tukey_c: 0.3                    # robust weight scale (== gate => smooth down-weighting)
+  with_scaling: true
+  rotation_fixed: false           # proposed pipeline fixes rotation upstream -> set true there
+  convergence_delta: 1.0e-5
+
+# ---------------------------------------------------------------------------
+# Baseline (pure Open3D, no semantics)
+# ---------------------------------------------------------------------------
+baseline_open3d:
+  voxel_size: 0.05
+  fpfh_radius: 0.25
+  fpfh_max_nn: 100
+  ransac_dist: 0.075
+  ransac_n: 4
+  ransac_iters: 4000000
+  ransac_confidence: 0.999
+  icp_dist: 0.15
+
+# ---------------------------------------------------------------------------
+# Evaluation / benchmark
+# ---------------------------------------------------------------------------
+eval:
+  trials: 100
+  seed: 0
+  perturb:                        # known Sim3 perturbation ranges for robustness test
+    rot_deg: [0.0, 180.0]
+    trans: [-2.0, 2.0]
+    log_scale: [-0.4, 0.4]        # scale in [e^-0.4, e^0.4] ~ [0.67, 1.49]
+  success:                        # thresholds for "recovered"
+    rot_deg: 5.0
+    trans: 0.1
+    scale_ratio: 0.05
+  out_dir: Registration/output/eval
+  # Frozen reference transform SLAM->reference (Sim3 4x4). establish_gt.py writes
+  # it to this sidecar (kept out of git via output/); run/benchmark read it back.
+  t_gt_path: Registration/output/eval/T_gt.json
+
+# Adopted best method (updated by benchmark.py). proposed/baseline_open3d are committed;
+# experimental variants live in regbim/methods/experimental/ (gitignored).
+adopted_method: proposed
