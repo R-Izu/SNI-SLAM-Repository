@@ -5,6 +5,13 @@ ignore/
 # 出力・結果
 output/
 *.ply
+
+# data/seg/output は worktree では別ディスクへの symlink になる。末尾スラッシュ無しで
+# anchor して symlink 自体も無視し、ローカル絶対パス(/home, D:)の誤コミットを防ぐ。
+/data
+/seg
+/output
+/Registration/output
 *.pth
 *.ckpt
 *.log
