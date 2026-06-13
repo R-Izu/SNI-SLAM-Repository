@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -18,6 +18,7 @@ from .. import preprocess, rotation
 from ..labels import NAME_TO_ID, LabeledCloud
 from ..metrics import apply_sim3, class_inlier_ratio, make_sim3
 from ..semantic_icp import semantic_icp
+from ..trace import Tracer
 from .base import BaseRegistration
 from . import register_method
 
@@ -33,7 +34,8 @@ def _structural_centroid(cloud: LabeledCloud, cfg: Dict) -> np.ndarray:
 class Proposed(BaseRegistration):
     name = "proposed"
 
-    def register(self, src: LabeledCloud, dst: LabeledCloud, cfg: Dict) -> np.ndarray:
+    def register(self, src: LabeledCloud, dst: LabeledCloud, cfg: Dict,
+                 tracer: Optional[Tracer] = None) -> np.ndarray:
         src_p = preprocess.prepare(src, cfg)
         dst_p = preprocess.prepare(dst, cfg)
 
@@ -45,12 +47,20 @@ class Proposed(BaseRegistration):
             src_p, dst_p, cfg)
         best_T = None
         best_score = -np.inf
+        best_trace: Optional[Tracer] = None
         for R in candidates:
             t0 = c_dst - R @ c_src                      # centroid-aligned init
             init_T = make_sim3(R, t0, 1.0)
-            T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True)
+            # Each yaw candidate gets its own tracer; only the winner's trajectory
+            # is surfaced, so the reported curve is a single coherent ICP run.
+            cand_tracer = Tracer(tracer.stride) if tracer is not None else None
+            T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True,
+                             tracer=cand_tracer)
             score = class_inlier_ratio(src_p, dst_p, T, thresh)
             if score > best_score:
                 best_score = score
                 best_T = T
+                best_trace = cand_tracer
+        if tracer is not None and best_trace is not None:
+            tracer.steps = best_trace.steps
         return best_T

@@ -18,6 +18,7 @@ from scipy.spatial import cKDTree
 from .labels import NAME_TO_ID, LabeledCloud
 from .metrics import apply_sim3, decompose_sim3, make_sim3
 from .scale import scale_translation, umeyama
+from .trace import Tracer
 
 
 def _tukey_weights(dist: np.ndarray, c: float) -> np.ndarray:
@@ -32,6 +33,7 @@ def semantic_icp(
     init_T: np.ndarray,
     cfg: Dict,
     rotation_fixed: Optional[bool] = None,
+    tracer: Optional[Tracer] = None,
 ) -> np.ndarray:
     """Iterative class-constrained Sim3 refinement. Returns a 4x4 Sim3 matrix."""
     icfg = cfg["semantic_icp"]
@@ -54,8 +56,12 @@ def semantic_icp(
 
     T = np.array(init_T, dtype=np.float64)
     R_fixed, _, _ = decompose_sim3(T)
+    if tracer is not None:
+        tracer.record(0, T)                 # initial (centroid-aligned) pose
 
-    for _ in range(max_iter):
+    last_it = 0
+    for i in range(1, max_iter + 1):
+        last_it = i
         moved = apply_sim3(T, src.points)
         s_list, d_list, w_list = [], [], []
         for c in common:
@@ -89,6 +95,10 @@ def semantic_icp(
 
         delta = float(np.linalg.norm(T_new - T))
         T = T_new
+        if tracer is not None:
+            tracer.record(i, T)
         if delta < conv:
             break
+    if tracer is not None:
+        tracer.record(last_it, T, force=True)   # guarantee the final pose is logged
     return T
