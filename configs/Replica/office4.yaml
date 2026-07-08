@@ -1,7 +1,12 @@
 inherit_from: configs/Replica/replica.yaml
+tracking:
+  vis_freq: 200          # デフォルト10000では2000フレームで可視化されない
 mapping:
   bound: [[-2.7,6.8],[-3.8,5.7],[-2.7,3.1]]
   marching_cubes_bound: [[-2.7,6.8],[-3.8,5.7],[-2.7,3.1]]
+  mesh_freq: 9999       # 途中のメッシュ生成を無効化（最終フレームのみ生成）
+meshing:
+  resolution: 0.02      # room0_official と同一プロトコル
 data:
-  input_folder: /data0/replica/office_4
-  output: output/Replica/office4/test
+  input_folder: data/replica/office_4_official/
+  output: output/Replica/office4/sectionC_run1

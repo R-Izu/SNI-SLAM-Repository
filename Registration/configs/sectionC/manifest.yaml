@@ -1,0 +1,27 @@
+# Scene manifest for analyze_scenes.py (section C cross-scene analysis).
+scenes:
+  - name: room_0
+    bench_dir: output/Registration/sectionC/room_0
+    ate_json: output/Replica/room0_official/260310_test4/eval_ate.json
+  - name: room_1
+    bench_dir: output/Registration/sectionC/room_1
+    ate_json: output/Replica/room1/sectionC_run1/eval_ate.json
+  - name: room_2
+    bench_dir: output/Registration/sectionC/room_2
+    ate_json: output/Replica/room2/sectionC_run1/eval_ate.json
+  - name: office_0
+    bench_dir: output/Registration/sectionC/office_0
+    ate_json: output/Replica/office0/sectionC_run1/eval_ate.json
+  - name: office_1
+    bench_dir: output/Registration/sectionC/office_1
+    ate_json: output/Replica/office1/sectionC_run1/eval_ate.json
+  - name: office_2
+    bench_dir: output/Registration/sectionC/office_2
+    ate_json: output/Replica/office2/sectionC_run1/eval_ate.json
+  - name: office_3
+    bench_dir: output/Registration/sectionC/office_3
+    ate_json: output/Replica/office3/sectionC_run1/eval_ate.json
+  - name: office_4
+    bench_dir: output/Registration/sectionC/office_4
+    ate_json: output/Replica/office4/sectionC_run1/eval_ate.json
+out_dir: output/Registration/sectionC_analysis

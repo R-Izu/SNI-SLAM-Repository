@@ -1,0 +1,85 @@
+# Section C multi-scene evaluation — Replica room_1.
+# Copy of replica_room0.yaml with per-scene out_dir and the dual success
+# thresholds (existing + instruction-strict). Perturbation protocol and
+# method parameters are identical across all sectionC scene configs.
+
+source:
+  type: slam_mesh
+  mesh_path: output/Replica/room1/sectionC_run1/mesh/final_mesh_semantic.ply
+  n_points: 200000
+
+reference:
+  type: replica_gt
+  mesh_path: data/replica/room_1/habitat/mesh_semantic.ply
+  info_path: data/replica/room_1/habitat/info_semantic.json
+  n_points: 200000
+  keep_classes: [wall, floor, ceiling, door, window]
+  gravity_dir_for_eval: [-0.0001732908, 0.0040177512, -0.9999918938]  # info_semantic.json; EVAL ONLY
+
+classes:
+  names: [background, wall, door, floor, window, ceiling]
+  palette:
+    background: [128, 128, 128]
+    wall:       [255,  64,  64]
+    door:       [255, 200,  64]
+    floor:      [180, 220, 255]
+    window:     [ 64, 200, 255]
+    ceiling:    [200, 100, 255]
+  replica_to_six:
+    93: wall
+    37: door
+    40: floor
+    97: window
+    31: ceiling
+  structural: [wall, floor, ceiling]
+  match_classes: [wall, floor, ceiling, door, window]
+
+preprocess:
+  voxel_size: 0.05
+  normal_radius: 0.15
+  normal_max_nn: 50
+
+rotation:
+  ransac_iters: 1000
+  ransac_normal_thresh_deg: 5.0
+  yaw_bins: 360
+  yaw_use_kmeans: true
+
+semantic_icp:
+  max_iter: 50
+  max_corr_dist: 0.3
+  tukey_c: 0.3
+  with_scaling: true
+  rotation_fixed: false
+  convergence_delta: 1.0e-5
+
+baseline_open3d:
+  voxel_size: 0.05
+  fpfh_radius: 0.25
+  fpfh_max_nn: 100
+  ransac_dist: 0.075
+  ransac_n: 4
+  ransac_iters: 4000000
+  ransac_confidence: 0.999
+  icp_dist: 0.15
+
+eval:
+  trials: 100
+  seed: 0
+  perturb:
+    rot_deg: [0.0, 180.0]
+    trans: [-2.0, 2.0]
+    log_scale: [-0.4, 0.4]
+  success:                        # existing thresholds (comparable to prior room_0 runs)
+    rot_deg: 5.0
+    trans: 0.1
+    scale_ratio: 0.05
+  success_strict:                 # instruction C.3 thresholds
+    rot_deg: 1.0
+    trans: 0.05
+    scale_ratio: 0.02
+  out_dir: output/Registration/sectionC/room_1
+  # No frozen T_gt for this scene (robustness protocol does not need it).
+  t_gt_path: output/Registration/sectionC/room_1/T_gt.json
+
+adopted_method: proposed

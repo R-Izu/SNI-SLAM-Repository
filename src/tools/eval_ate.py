@@ -20,6 +20,7 @@
     # limitations under the License.
 
 import argparse
+import json
 import os
 import numpy
 import torch
@@ -245,7 +246,7 @@ def evaluate_ate(first_list, second_list, plot="", _args=""):
     }
 
 
-def evaluate(poses_gt, poses_est, plot):
+def evaluate(poses_gt, poses_est, plot) -> dict:
 
     poses_gt = poses_gt.cpu().numpy()
     poses_est = poses_est.cpu().numpy()
@@ -256,6 +257,7 @@ def evaluate(poses_gt, poses_est, plot):
 
     results = evaluate_ate(poses_gt, poses_est, plot)
     print(results)
+    return results
 
 
 def convert_poses(c2w_list, N, scale, gt=True):
@@ -310,4 +312,16 @@ if __name__ == '__main__':
             poses_gt, mask = convert_poses(gt_c2w_list, N, scale)
             poses_est, _ = convert_poses(estimate_c2w_list, N, scale)
             poses_est = poses_est[mask]
-            evaluate(poses_gt, poses_est, plot=f'{output}/eval_ate_plot.png')
+            results = evaluate(poses_gt, poses_est,
+                               plot=f'{output}/eval_ate_plot.png')
+            results_meta = {
+                "units": "cm",
+                "ckpt_path": ckpt_path,
+                "n_frames": int(N) + 1,
+                "config": args.config,
+                **{k: float(v) for k, v in results.items()},
+            }
+            json_path = f'{output}/eval_ate.json'
+            with open(json_path, 'w') as f:
+                json.dump(results_meta, f, indent=2)
+            print(f'Saved ATE metrics to {json_path}')

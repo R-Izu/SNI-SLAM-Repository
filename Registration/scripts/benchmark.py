@@ -14,21 +14,27 @@ methods dropped in regbim/methods/experimental/ are included automatically.
 import argparse
 import json
 import os
+import subprocess
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import _bootstrap  # noqa: F401
 import numpy as np
 
-from regbim import io_utils, metrics
+from regbim import io_utils, metrics, stats
 from regbim.config import load_config, load_t_gt
 from regbim.methods import available_methods, get_method
 
 
-def _evaluate(method_name, src, dst, T_ref_or_none, cfg, trials, rng) -> Dict:
+def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
+              cfg: Dict, trials: int, seed: int) -> Tuple[Dict, List[Dict]]:
     method = get_method(method_name)
     thr = cfg["semantic_icp"]["max_corr_dist"]
     succ = cfg["eval"]["success"]
+    succ_strict = cfg["eval"].get("success_strict")
+    # Fresh generator per method: every method faces the identical
+    # perturbation sequence (paired comparison, fully determined by the seed).
+    rng = np.random.default_rng(seed)
 
     t0 = time.time()
     T0 = method.register(src, dst, cfg)
@@ -41,24 +47,43 @@ def _evaluate(method_name, src, dst, T_ref_or_none, cfg, trials, rng) -> Dict:
     # alignment T0 after a known Sim3 perturbation? (Fair across methods; T_gt is
     # only used for the direct error metric above.)
     ref_T = T0
+    trial_records: List[Dict] = []
     rot_errs, trans_errs, scale_errs, times, successes = [], [], [], [], []
-    for _ in range(trials):
+    successes_strict = []
+    for i in range(trials):
         P = metrics.random_sim3(rng, cfg["eval"]["perturb"])
         src_p = metrics.transform_cloud(src, P)
         ts = time.time()
         Tt = method.register(src_p, dst, cfg)
-        times.append(time.time() - ts)
+        dt = time.time() - ts
+        times.append(dt)
         expected = ref_T @ metrics.invert_sim3(P)
         e = metrics.sim3_errors(Tt, expected)
         rot_errs.append(e["rot_deg"]); trans_errs.append(e["trans"]); scale_errs.append(e["scale_ratio"])
-        ok = (e["rot_deg"] < succ["rot_deg"] and e["trans"] < succ["trans"]
-              and e["scale_ratio"] < succ["scale_ratio"])
+        ok = stats.check_success(e, succ)
         successes.append(bool(ok))
+        ok_strict = stats.check_success(e, succ_strict) if succ_strict else None
+        if ok_strict is not None:
+            successes_strict.append(bool(ok_strict))
+        Rp, tp, sp = metrics.decompose_sim3(P)
+        trial_records.append({
+            "method": method_name,
+            "trial": i,
+            "pert_rot_deg": round(metrics.rotation_error_deg(Rp, np.eye(3)), 3),
+            "pert_trans": round(float(np.linalg.norm(tp)), 4),
+            "pert_scale": round(float(sp), 4),
+            "rot_deg": round(e["rot_deg"], 4),
+            "trans": round(e["trans"], 5),
+            "scale_ratio": round(e["scale_ratio"], 5),
+            "time_s": round(dt, 3),
+            "success": bool(ok),
+            "success_strict": ok_strict,
+        })
 
     def med(x):
         return float(np.median(x)) if x else float("nan")
 
-    return {
+    row = {
         "method": method_name,
         "direct_time_s": round(direct_time, 3),
         "direct_chamfer": round(direct_chamfer, 4),
@@ -74,6 +99,26 @@ def _evaluate(method_name, src, dst, T_ref_or_none, cfg, trials, rng) -> Dict:
         "med_time_s": round(med(times), 3),
     }
 
+    # Appended columns (existing columns above keep their order for
+    # backward compatibility with older results.csv consumers).
+    ci_lo, ci_hi = stats.wilson_ci(int(np.sum(successes)), len(successes))
+    row["success_ci_lo"] = round(ci_lo, 3)
+    row["success_ci_hi"] = round(ci_hi, 3)
+    if successes_strict:
+        s_lo, s_hi = stats.wilson_ci(int(np.sum(successes_strict)), len(successes_strict))
+        row["success_rate_strict"] = round(float(np.mean(successes_strict)), 3)
+        row["success_strict_ci_lo"] = round(s_lo, 3)
+        row["success_strict_ci_hi"] = round(s_hi, 3)
+    else:
+        row["success_rate_strict"] = None
+        row["success_strict_ci_lo"] = None
+        row["success_strict_ci_hi"] = None
+    for key, errs in (("rot_deg", rot_errs), ("trans", trans_errs), ("scale_ratio", scale_errs)):
+        pct = stats.error_percentiles(errs)
+        for stat_name in ("min", "q25", "q75", "max", "mean", "std"):
+            row[f"{key}_{stat_name}"] = round(pct[stat_name], 5)
+    return row, trial_records
+
 
 def _write_csv(rows: List[Dict], path: str) -> None:
     import csv
@@ -82,6 +127,47 @@ def _write_csv(rows: List[Dict], path: str) -> None:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
+
+
+def _git_commit() -> Optional[str]:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            text=True).strip()
+    except Exception:
+        return None
+
+
+def _write_summary(rows: List[Dict], all_trials: List[Dict], cfg: Dict,
+                   config_path: str, trials: int, out_dir: str) -> None:
+    """summary.json: reproducibility metadata + per-method failure breakdown."""
+    succ = cfg["eval"]["success"]
+    succ_strict = cfg["eval"].get("success_strict")
+    per_method = {}
+    for row in rows:
+        name = row["method"]
+        errs = [{"rot_deg": t["rot_deg"], "trans": t["trans"],
+                 "scale_ratio": t["scale_ratio"]}
+                for t in all_trials if t["method"] == name]
+        entry = {"aggregate": row,
+                 "failure_breakdown": stats.failure_breakdown(errs, succ)}
+        if succ_strict:
+            entry["failure_breakdown_strict"] = stats.failure_breakdown(errs, succ_strict)
+        per_method[name] = entry
+    summary = {
+        "config": os.path.abspath(config_path),
+        "seed": int(cfg["eval"]["seed"]),
+        "trials": trials,
+        "perturb": cfg["eval"]["perturb"],
+        "success_thresholds": succ,
+        "success_thresholds_strict": succ_strict,
+        "git_commit": _git_commit(),
+        "rng_scheme": "per-method reseed (identical perturbation sequence per method)",
+        "methods": per_method,
+    }
+    with open(os.path.join(out_dir, "summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
 
 
 def _write_figures(rows: List[Dict], out_dir: str) -> None:
@@ -113,7 +199,7 @@ def main() -> None:
     args = ap.parse_args()
     cfg = load_config(args.config)
     trials = args.trials if args.trials is not None else int(cfg["eval"]["trials"])
-    rng = np.random.default_rng(int(cfg["eval"]["seed"]))
+    seed = int(cfg["eval"]["seed"])
 
     src = io_utils.load_source_cloud(cfg)
     dst = io_utils.load_reference_cloud(cfg)
@@ -123,14 +209,19 @@ def main() -> None:
               "method's own direct result. Run establish_gt.py for absolute error.")
 
     methods = args.methods or available_methods()
-    print(f"benchmarking methods: {methods}  (trials={trials})")
+    print(f"benchmarking methods: {methods}  (trials={trials}, seed={seed})")
     rows = []
+    all_trials: List[Dict] = []
     for name in methods:
         print(f"  -> {name}")
-        rows.append(_evaluate(name, src, dst, T_gt, cfg, trials, rng))
+        row, trial_records = _evaluate(name, src, dst, T_gt, cfg, trials, seed)
+        rows.append(row)
+        all_trials.extend(trial_records)
 
     out_dir = cfg["eval"]["out_dir"]
     _write_csv(rows, os.path.join(out_dir, "results.csv"))
+    _write_csv(all_trials, os.path.join(out_dir, "trials.csv"))
+    _write_summary(rows, all_trials, cfg, args.config, trials, out_dir)
     _write_figures(rows, out_dir)
 
     # Best: highest success rate, ties broken by lowest direct chamfer.
