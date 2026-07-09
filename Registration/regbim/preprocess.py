@@ -52,7 +52,12 @@ def split_by_label(cloud: LabeledCloud) -> Dict[int, LabeledCloud]:
 
 
 def prepare(cloud: LabeledCloud, cfg: Dict) -> LabeledCloud:
-    """Standard pipeline prep: ensure normals, then voxel-downsample."""
+    """Standard pipeline prep: ensure normals, then voxel-downsample.
+
+    ``voxel_size <= 0`` skips downsampling (density-sensitivity "raw" level).
+    """
     pp = cfg["preprocess"]
     cloud = estimate_normals(cloud, pp["normal_radius"], pp["normal_max_nn"])
+    if float(pp["voxel_size"]) <= 0.0:
+        return cloud
     return voxel_downsample(cloud, pp["voxel_size"])

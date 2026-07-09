@@ -150,7 +150,8 @@ def _git_commit() -> Optional[str]:
 
 
 def _write_summary(rows: List[Dict], all_trials: List[Dict], cfg: Dict,
-                   config_path: str, trials: int, out_dir: str) -> None:
+                   config_path: str, trials: int, out_dir: str,
+                   extra_meta: Optional[Dict] = None) -> None:
     """summary.json: reproducibility metadata + per-method failure breakdown."""
     succ = cfg["eval"]["success"]
     succ_strict = cfg["eval"].get("success_strict")
@@ -176,6 +177,7 @@ def _write_summary(rows: List[Dict], all_trials: List[Dict], cfg: Dict,
         "rng_scheme": "per-method reseed (identical perturbation sequence per method)",
         "methods": per_method,
     }
+    summary.update(extra_meta or {})
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -208,13 +210,35 @@ def main() -> None:
     ap.add_argument("--methods", nargs="*", default=None, help="subset to run")
     ap.add_argument("--out-dir", default=None,
                     help="override cfg eval.out_dir (keeps prior runs intact)")
+    ap.add_argument("--label-noise", type=float, default=None,
+                    help="fraction of source points whose GT label is replaced "
+                         "by a random different class (sensitivity, G4-3)")
+    ap.add_argument("--voxel-size", type=float, default=None,
+                    help="override cfg preprocess.voxel_size (density sweep, "
+                         "G4-2); pass 0 to disable downsampling")
     args = ap.parse_args()
     cfg = load_config(args.config)
     trials = args.trials if args.trials is not None else int(cfg["eval"]["trials"])
     seed = int(cfg["eval"]["seed"])
+    if args.voxel_size is not None:
+        cfg["preprocess"]["voxel_size"] = float(args.voxel_size)
 
     src = io_utils.load_source_cloud(cfg)
     dst = io_utils.load_reference_cloud(cfg)
+    if args.label_noise:
+        # Sensitivity (G4-3): corrupt a fixed fraction of source labels once,
+        # deterministically (seed offset by the noise level), then run the usual
+        # perturbation protocol on the corrupted cloud.
+        noise_seed = seed + int(round(args.label_noise * 1000)) + 7919
+        n_rng = np.random.default_rng(noise_seed)
+        n = len(src.labels)
+        n_flip = int(round(args.label_noise * n))
+        idx = n_rng.choice(n, size=n_flip, replace=False)
+        n_classes = 6
+        offsets = n_rng.integers(1, n_classes, size=n_flip)
+        src.labels[idx] = (src.labels[idx] + offsets) % n_classes
+        print(f"label noise: flipped {n_flip}/{n} source labels "
+              f"(p={args.label_noise}, noise_seed={noise_seed})")
     T_gt = load_t_gt(cfg)
     if T_gt is None:
         print("WARNING: no frozen T_gt; recovery is measured relative to each "
@@ -233,7 +257,9 @@ def main() -> None:
     out_dir = args.out_dir or cfg["eval"]["out_dir"]
     _write_csv(rows, os.path.join(out_dir, "results.csv"))
     _write_csv(all_trials, os.path.join(out_dir, "trials.csv"))
-    _write_summary(rows, all_trials, cfg, args.config, trials, out_dir)
+    _write_summary(rows, all_trials, cfg, args.config, trials, out_dir,
+                   extra_meta={"label_noise": args.label_noise,
+                               "voxel_size_override": args.voxel_size})
     _write_figures(rows, out_dir)
 
     # Best: highest success rate, ties broken by lowest direct chamfer.
