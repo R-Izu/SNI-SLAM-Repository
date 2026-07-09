@@ -86,10 +86,36 @@ class Proposed(BaseRegistration):
         src_p = preprocess.prepare(src, cfg)
         dst_p = preprocess.prepare(dst, cfg)
         thresh = float(cfg["semantic_icp"]["max_corr_dist"])
+        abl = cfg.get("ablation") or {}
 
         struct_ids = [NAME_TO_ID[n] for n in cfg["classes"]["structural"]]
         floor_ceiling = [NAME_TO_ID["floor"], NAME_TO_ID["ceiling"]]
         wall = [NAME_TO_ID["wall"]]
+
+        if abl.get("no_gravity"):
+            # Ablation: drop the whole physical-constraint stage (gravity
+            # canonicalisation, Manhattan yaw candidates, plane-extent seeding —
+            # all derive from the canonical frame). Init = structural-centroid
+            # alignment at unit scale; rotation left to free Sim3 semantic ICP.
+            c_src = _struct_centroid(src_p.points, src_p.labels, struct_ids)
+            c_dst = _struct_centroid(dst_p.points, dst_p.labels, struct_ids)
+            init_T = make_sim3(np.eye(3), c_dst - c_src, 1.0)
+            return semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=False,
+                                tracer=tracer)
+
+        # Scoring clouds: label-collapsed for the no-semantic ablation so the
+        # yaw disambiguation gets no help from labels either.
+        if abl.get("single_class"):
+            match_ids = [NAME_TO_ID[n] for n in cfg["classes"]["match_classes"]]
+            one = match_ids[0]
+            src_score = LabeledCloud(
+                src_p.points, np.where(np.isin(src_p.labels, match_ids), one, 0),
+                src_p.normals)
+            dst_score = LabeledCloud(
+                dst_p.points, np.where(np.isin(dst_p.labels, match_ids), one, 0),
+                dst_p.normals)
+        else:
+            src_score, dst_score = src_p, dst_p
 
         # Reference canonical axes (rows: wall-x, wall-y, up) in the reference's
         # own frame -- the frame each rotation candidate maps the source into.
@@ -109,13 +135,14 @@ class Proposed(BaseRegistration):
             src_rot = src_p.points @ R.T                   # source in reference frame
             c_src = _struct_centroid(src_rot, src_p.labels, struct_ids)
             init_T = self._plane_seed(src_rot, src_p.labels, R, axes, dst_span,
-                                      c_dst, c_src)
+                                      c_dst, c_src,
+                                      fixed_scale=bool(abl.get("fixed_scale")))
             # Each yaw candidate gets its own tracer; only the winner's trajectory
             # is surfaced, so the reported curve is a single coherent ICP run.
             cand_tracer = Tracer(tracer.stride) if tracer is not None else None
             T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True,
                              tracer=cand_tracer)
-            score = class_inlier_ratio(src_p, dst_p, T, thresh)
+            score = class_inlier_ratio(src_score, dst_score, T, thresh)
             if score > best_score:
                 best_score = score
                 plane_T = T
@@ -140,7 +167,8 @@ class Proposed(BaseRegistration):
 
     @staticmethod
     def _plane_seed(src_rot: np.ndarray, labels: np.ndarray, R: np.ndarray, axes,
-                    dst_span, c_dst: np.ndarray, c_src: np.ndarray) -> np.ndarray:
+                    dst_span, c_dst: np.ndarray, c_src: np.ndarray,
+                    fixed_scale: bool = False) -> np.ndarray:
         """Scale + translation from per-axis structural extents (rotation fixed)."""
         src_span = {k: _axis_span(src_rot, labels, ids, e) for k, e, ids in axes}
 
@@ -151,6 +179,8 @@ class Proposed(BaseRegistration):
                   if dst_span[k] is not None and src_span[k] is not None
                   and src_span[k][1] > _MIN_EXTENT and dst_span[k][1] > _MIN_EXTENT]
         s = float(np.clip(np.median(ratios), *_SCALE_CLIP)) if ratios else 1.0
+        if fixed_scale:
+            s = 1.0    # ablation: GT scale is pre-applied upstream (rigid mode)
 
         # Centroid alignment at the estimated scale, then overwrite each axis
         # component with its plane-matched offset where available (guarantees a

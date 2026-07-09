@@ -46,6 +46,18 @@ def semantic_icp(
     with_scaling = bool(icfg["with_scaling"])
 
     match_ids = [NAME_TO_ID[n] for n in cfg["classes"]["match_classes"]]
+    if (cfg.get("ablation") or {}).get("single_class"):
+        # Ablation (proposed_no_semantic): collapse every matchable class into a
+        # single bucket so correspondences ignore labels. Background still drops
+        # out (it is not in match_ids), isolating the multi-class constraint.
+        one = match_ids[0]
+        src = LabeledCloud(src.points,
+                           np.where(np.isin(src.labels, match_ids), one, 0),
+                           src.normals)
+        dst = LabeledCloud(dst.points,
+                           np.where(np.isin(dst.labels, match_ids), one, 0),
+                           dst.normals)
+        match_ids = [one]
     common = sorted(set(src.present_classes()) & set(dst.present_classes())
                     & set(match_ids))
 

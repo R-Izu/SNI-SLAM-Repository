@@ -35,6 +35,10 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
     # Fresh generator per method: every method faces the identical
     # perturbation sequence (paired comparison, fully determined by the seed).
     rng = np.random.default_rng(seed)
+    # Rigid methods can't estimate scale: pre-apply the GT (perturbation) scale
+    # as a fairness handicap. Declared via the method's ``gt_scale`` attribute;
+    # recorded per-row so summary.json documents the protocol.
+    gt_scale = bool(getattr(method, "gt_scale", False))
 
     t0 = time.time()
     T0 = method.register(src, dst, cfg)
@@ -52,6 +56,11 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
     successes_strict = []
     for i in range(trials):
         P = metrics.random_sim3(rng, cfg["eval"]["perturb"])
+        if gt_scale:
+            # Same draw (keeps the perturbation sequence paired across methods),
+            # then undo the scale component = "GT scale pre-applied" protocol.
+            Rp_, tp_, sp_ = metrics.decompose_sim3(P)
+            P = metrics.make_sim3(Rp_, tp_ / sp_, 1.0)
         src_p = metrics.transform_cloud(src, P)
         ts = time.time()
         Tt = method.register(src_p, dst, cfg)
@@ -117,6 +126,7 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
         pct = stats.error_percentiles(errs)
         for stat_name in ("min", "q25", "q75", "max", "mean", "std"):
             row[f"{key}_{stat_name}"] = round(pct[stat_name], 5)
+    row["gt_scale_prescaled"] = gt_scale
     return row, trial_records
 
 
@@ -196,6 +206,8 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--trials", type=int, default=None)
     ap.add_argument("--methods", nargs="*", default=None, help="subset to run")
+    ap.add_argument("--out-dir", default=None,
+                    help="override cfg eval.out_dir (keeps prior runs intact)")
     args = ap.parse_args()
     cfg = load_config(args.config)
     trials = args.trials if args.trials is not None else int(cfg["eval"]["trials"])
@@ -218,7 +230,7 @@ def main() -> None:
         rows.append(row)
         all_trials.extend(trial_records)
 
-    out_dir = cfg["eval"]["out_dir"]
+    out_dir = args.out_dir or cfg["eval"]["out_dir"]
     _write_csv(rows, os.path.join(out_dir, "results.csv"))
     _write_csv(all_trials, os.path.join(out_dir, "trials.csv"))
     _write_summary(rows, all_trials, cfg, args.config, trials, out_dir)

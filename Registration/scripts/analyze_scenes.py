@@ -96,6 +96,22 @@ def _load_scene(entry: Dict) -> Optional[Dict]:
     sum_path = os.path.join(bench, "summary.json")
     if os.path.isfile(sum_path):
         summary = json.load(open(sum_path))
+    # Merge additional benchmark dirs (e.g. ablation / extra-baseline runs that
+    # were written next to, not over, the original results).
+    for extra in entry.get("extra_bench_dirs", []) or []:
+        er = os.path.join(extra, "results.csv")
+        et = os.path.join(extra, "trials.csv")
+        es = os.path.join(extra, "summary.json")
+        if os.path.isfile(er):
+            with open(er) as f:
+                rows += list(csv.DictReader(f))
+        if os.path.isfile(et):
+            with open(et) as f:
+                trials += list(csv.DictReader(f))
+        if os.path.isfile(es):
+            extra_sum = json.load(open(es))
+            summary.setdefault("methods", {}).update(
+                extra_sum.get("methods", {}))
     ate = None
     ate_json = entry.get("ate_json")
     if ate_json and os.path.isfile(ate_json):
