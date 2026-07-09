@@ -31,6 +31,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
+import _bootstrap  # noqa: F401
+from regbim import journal_stats
+
 SERIES_1 = "#2a78d6"   # categorical slot 1 (existing thresholds)
 SERIES_2 = "#1baf7a"   # categorical slot 2 (strict thresholds)
 INK = "#333333"
@@ -38,6 +41,42 @@ GRID = dict(color="#cccccc", linewidth=0.6, alpha=0.6)
 ERROR_PANELS = (("rot_deg", "rotation error [deg]"),
                 ("trans", "translation error [m]"),
                 ("scale_ratio", "scale error ratio"))
+
+# Fixed categorical hue order per method (never cycled; new methods get the
+# next slot in this known order).
+METHOD_COLORS = {
+    "proposed": "#2a78d6",             # blue
+    "baseline_open3d": "#eda100",      # yellow
+    "proposed_no_semantic": "#e34948", # red
+    "proposed_no_gravity": "#4a3aa7",  # violet
+    "proposed_fixed_scale": "#1baf7a", # aqua
+    "baseline_fgr": "#008300",         # green
+    "baseline_teaser": "#e87ba4",      # magenta
+    "baseline_super4pcs": "#eb6834",   # orange
+}
+FALLBACK_COLOR = "#888888"
+
+
+def _mcolor(method: str) -> str:
+    return METHOD_COLORS.get(method, FALLBACK_COLOR)
+
+
+def _methods_in(scenes: List[Dict]) -> List[str]:
+    seen: List[str] = []
+    for sc in scenes:
+        for t in sc["trials"]:
+            if t["method"] not in seen:
+                seen.append(t["method"])
+    order = list(METHOD_COLORS.keys())
+    return sorted(seen, key=lambda m: order.index(m) if m in order else 99)
+
+
+def _trials_of(sc: Dict, method: str) -> List[Dict]:
+    return [t for t in sc["trials"] if t["method"] == method]
+
+
+def _succ_bool(t: Dict) -> bool:
+    return t["success"] == "True"
 
 
 def _load_scene(entry: Dict) -> Optional[Dict]:
@@ -200,9 +239,196 @@ def _plot_histograms(sc: Dict, cfg_success: Dict, cfg_strict: Optional[Dict],
     print(f"wrote {path}")
 
 
+def _plot_alpha_recall_aggregate(scenes: List[Dict], out_dir: str) -> None:
+    """One figure, three panels (rot/trans/scale), pooled over all scenes."""
+    methods = _methods_in(scenes)
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
+    for ax, (axis, (col, upper, label)) in zip(axes, journal_stats.ALPHA_AXES.items()):
+        for m in methods:
+            errs = [float(t[col]) for sc in scenes for t in _trials_of(sc, m)]
+            if not errs:
+                continue
+            alphas, recall = journal_stats.alpha_recall(errs, upper)
+            ax.plot(alphas, recall, color=_mcolor(m), linewidth=2, label=m)
+        ax.set_xlabel(label, color=INK)
+        ax.set_ylim(-0.02, 1.02)
+        ax.grid(True, **GRID)
+        ax.set_axisbelow(True)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+    axes[0].set_ylabel("recall (success rate)", color=INK)
+    axes[0].legend(frameon=False, fontsize=9)
+    fig.suptitle("alpha-recall, all scenes pooled "
+                 f"(n={sum(len(_trials_of(sc, methods[0])) for sc in scenes)}/method)",
+                 color=INK)
+    fig.tight_layout()
+    path = os.path.join(out_dir, "alpha_recall_aggregate.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"wrote {path}")
+
+
+def _plot_alpha_recall_grid(scenes: List[Dict], out_dir: str) -> None:
+    """Grid: rows = error axes, cols = scenes; method curves per cell."""
+    methods = _methods_in(scenes)
+    n_sc = len(scenes)
+    fig, axes = plt.subplots(3, n_sc, figsize=(2.6 * n_sc, 9), squeeze=False)
+    for row, (axis, (col, upper, label)) in enumerate(journal_stats.ALPHA_AXES.items()):
+        for ci, sc in enumerate(scenes):
+            ax = axes[row][ci]
+            for m in methods:
+                errs = [float(t[col]) for t in _trials_of(sc, m)]
+                if not errs:
+                    continue
+                alphas, recall = journal_stats.alpha_recall(errs, upper)
+                ax.plot(alphas, recall, color=_mcolor(m), linewidth=1.6, label=m)
+            ax.set_ylim(-0.02, 1.02)
+            ax.grid(True, **GRID)
+            ax.set_axisbelow(True)
+            for spine in ("top", "right"):
+                ax.spines[spine].set_visible(False)
+            if row == 0:
+                ax.set_title(sc["name"], fontsize=10, color=INK)
+            if ci == 0:
+                ax.set_ylabel(label, fontsize=9, color=INK)
+            else:
+                ax.set_yticklabels([])
+    axes[0][0].legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    path = os.path.join(out_dir, "alpha_recall_scenes.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"wrote {path}")
+
+
+def _stratify_perturbation(scenes: List[Dict], out_dir: str,
+                           method: str = "proposed") -> None:
+    """Per-bin success rate vs perturbation magnitude; figure + full CSV."""
+    rows_csv: List[Dict] = []
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
+    for ax, (axis, (col, edges, label)) in zip(axes, journal_stats.PERT_AXES.items()):
+        # thin per-scene lines
+        for sc in scenes:
+            trials = _trials_of(sc, method)
+            bins = journal_stats.stratified_success(
+                [float(t[col]) for t in trials], [_succ_bool(t) for t in trials], edges)
+            centers = [(b["bin_lo"] + b["bin_hi"]) / 2 for b in bins]
+            ax.plot(centers, [b["rate"] for b in bins], color="#bbbbbb",
+                    linewidth=0.9, zorder=2)
+            for b in bins:
+                rows_csv.append({"axis": axis, "scene": sc["name"], "method": method, **b})
+        # pooled bold line with Wilson CI band
+        all_pv = [float(t[col]) for sc in scenes for t in _trials_of(sc, method)]
+        all_sc = [_succ_bool(t) for sc in scenes for t in _trials_of(sc, method)]
+        bins = journal_stats.stratified_success(all_pv, all_sc, edges)
+        centers = [(b["bin_lo"] + b["bin_hi"]) / 2 for b in bins]
+        rate = [b["rate"] for b in bins]
+        ax.fill_between(centers, [b["ci_lo"] for b in bins], [b["ci_hi"] for b in bins],
+                        color=SERIES_1, alpha=0.18, linewidth=0, zorder=3)
+        ax.plot(centers, rate, color=SERIES_1, linewidth=2.4, zorder=4,
+                label="all scenes (Wilson 95% CI)")
+        for b in bins:
+            rows_csv.append({"axis": axis, "scene": "ALL", "method": method, **b})
+        ax.set_xlabel(label, color=INK)
+        ax.set_ylim(-0.02, 1.02)
+        ax.grid(True, **GRID)
+        ax.set_axisbelow(True)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+    axes[0].set_ylabel(f"success rate ({method})", color=INK)
+    axes[0].legend(frameon=False, fontsize=9)
+    fig.tight_layout()
+    path = os.path.join(out_dir, "perturbation_stratified.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    csv_path = os.path.join(out_dir, "perturbation_stratified.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows_csv[0].keys()))
+        w.writeheader()
+        w.writerows(rows_csv)
+    print(f"wrote {path} and {csv_path}")
+
+
+def _mcnemar_tables(scenes: List[Dict], out_dir: str,
+                    reference: str = "proposed") -> None:
+    """McNemar exact test: reference vs every other method, per scene + pooled."""
+    methods = [m for m in _methods_in(scenes) if m != reference]
+    rows: List[Dict] = []
+    for m in methods:
+        pooled_a: List[bool] = []
+        pooled_b: List[bool] = []
+        for sc in scenes:
+            ta, tb = _trials_of(sc, reference), _trials_of(sc, m)
+            if len(ta) != len(tb) or not ta:
+                continue
+            a = [_succ_bool(t) for t in sorted(ta, key=lambda t: int(t["trial"]))]
+            b = [_succ_bool(t) for t in sorted(tb, key=lambda t: int(t["trial"]))]
+            res = journal_stats.mcnemar_exact(a, b)
+            rows.append({"scene": sc["name"], "method_a": reference, "method_b": m, **res})
+            pooled_a += a
+            pooled_b += b
+        if pooled_a:
+            res = journal_stats.mcnemar_exact(pooled_a, pooled_b)
+            rows.append({"scene": "ALL", "method_a": reference, "method_b": m, **res})
+    if not rows:
+        print("mcnemar: nothing to compare")
+        return
+    path = os.path.join(out_dir, "mcnemar.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"wrote {path}")
+
+
+def _normality_tables(scenes: List[Dict], out_dir: str) -> None:
+    """Shapiro-Wilk per scene x method x error axis."""
+    rows: List[Dict] = []
+    for sc in scenes:
+        for m in _methods_in(scenes):
+            trials = _trials_of(sc, m)
+            if not trials:
+                continue
+            for key, _ in ERROR_PANELS:
+                res = journal_stats.shapiro_wilk([float(t[key]) for t in trials])
+                rows.append({"scene": sc["name"], "method": m, "error_axis": key, **res})
+    path = os.path.join(out_dir, "normality_shapiro.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    n_rej = sum(1 for r in rows if r["normal_at_5pct"] is False)
+    print(f"wrote {path} (normality rejected in {n_rej}/{len(rows)} cells)")
+
+
+def _timing_tables(scenes: List[Dict], out_dir: str) -> None:
+    """Per-trial registration time mean +/- sigma per scene x method."""
+    rows: List[Dict] = []
+    for sc in scenes:
+        for m in _methods_in(scenes):
+            trials = _trials_of(sc, m)
+            if not trials:
+                continue
+            res = journal_stats.timing_stats([float(t["time_s"]) for t in trials])
+            rows.append({"scene": sc["name"], "method": m, **res})
+    path = os.path.join(out_dir, "timing.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"wrote {path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
+    ap.add_argument("--alpha-recall", action="store_true")
+    ap.add_argument("--stratify-perturbation", action="store_true")
+    ap.add_argument("--mcnemar", action="store_true")
+    ap.add_argument("--normality", action="store_true")
+    ap.add_argument("--timing", action="store_true")
+    ap.add_argument("--extras", action="store_true",
+                    help="shorthand for all journal-level post-processing flags")
     args = ap.parse_args()
     manifest = yaml.safe_load(open(args.manifest))
     out_dir = manifest["out_dir"]
@@ -217,6 +443,18 @@ def main() -> None:
         succ = sc["summary"].get("success_thresholds", {})
         strict = sc["summary"].get("success_thresholds_strict")
         _plot_histograms(sc, succ, strict, out_dir)
+
+    if args.alpha_recall or args.extras:
+        _plot_alpha_recall_aggregate(scenes, out_dir)
+        _plot_alpha_recall_grid(scenes, out_dir)
+    if args.stratify_perturbation or args.extras:
+        _stratify_perturbation(scenes, out_dir)
+    if args.mcnemar or args.extras:
+        _mcnemar_tables(scenes, out_dir)
+    if args.normality or args.extras:
+        _normality_tables(scenes, out_dir)
+    if args.timing or args.extras:
+        _timing_tables(scenes, out_dir)
 
 
 if __name__ == "__main__":
