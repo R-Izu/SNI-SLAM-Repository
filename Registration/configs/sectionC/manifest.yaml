@@ -1,27 +1,50 @@
-# Scene manifest for analyze_scenes.py (section C cross-scene analysis).
 scenes:
-  - name: room_0
-    bench_dir: output/Registration/sectionC/room_0
-    ate_json: output/Replica/room0_official/260310_test4/eval_ate.json
-  - name: room_1
-    bench_dir: output/Registration/sectionC/room_1
-    ate_json: output/Replica/room1/sectionC_run1/eval_ate.json
-  - name: room_2
-    bench_dir: output/Registration/sectionC/room_2
-    ate_json: output/Replica/room2/sectionC_run1/eval_ate.json
-  - name: office_0
-    bench_dir: output/Registration/sectionC/office_0
-    ate_json: output/Replica/office0/sectionC_run1/eval_ate.json
-  - name: office_1
-    bench_dir: output/Registration/sectionC/office_1
-    ate_json: output/Replica/office1/sectionC_run1/eval_ate.json
-  - name: office_2
-    bench_dir: output/Registration/sectionC/office_2
-    ate_json: output/Replica/office2/sectionC_run1/eval_ate.json
-  - name: office_3
-    bench_dir: output/Registration/sectionC/office_3
-    ate_json: output/Replica/office3/sectionC_run1/eval_ate.json
-  - name: office_4
-    bench_dir: output/Registration/sectionC/office_4
-    ate_json: output/Replica/office4/sectionC_run1/eval_ate.json
+- name: room_0
+  bench_dir: output/Registration/sectionC/room_0
+  ate_json: output/Replica/room0_official/260310_test4/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/room_0
+  - output/Registration/journal_phase3/room_0
+- name: room_1
+  bench_dir: output/Registration/sectionC/room_1
+  ate_json: output/Replica/room1/sectionC_run1/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/room_1
+  - output/Registration/journal_phase3/room_1
+- name: room_2
+  bench_dir: output/Registration/sectionC/room_2
+  ate_json: output/Replica/room2/sectionC_run1/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/room_2
+  - output/Registration/journal_phase3/room_2
+- name: office_0
+  bench_dir: output/Registration/sectionC/office_0
+  ate_json: output/Replica/office0/sectionC_run1/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/office_0
+  - output/Registration/journal_phase3/office_0
+- name: office_1
+  bench_dir: output/Registration/sectionC/office_1
+  ate_json: output/Replica/office1/sectionC_run1/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/office_1
+  - output/Registration/journal_phase3/office_1
+- name: office_2
+  bench_dir: output/Registration/sectionC/office_2
+  ate_json: output/Replica/office2/sectionC_run1/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/office_2
+  - output/Registration/journal_phase3/office_2
+- name: office_3
+  bench_dir: output/Registration/sectionC/office_3
+  ate_json: output/Replica/office3/sectionC_run1/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/office_3
+  - output/Registration/journal_phase3/office_3
+- name: office_4
+  bench_dir: output/Registration/sectionC/office_4
+  ate_json: output/Replica/office4/sectionC_run1/eval_ate.json
+  extra_bench_dirs:
+  - output/Registration/journal_phase2/office_4
+  - output/Registration/journal_phase3/office_4
 out_dir: output/Registration/sectionC_analysis
