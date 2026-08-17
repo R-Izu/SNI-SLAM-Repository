@@ -1,0 +1,126 @@
+# 実データ・シーンマニフェスト
+#
+# 指示書 00_Coordination/Instructions/2026-08-17_r4_realdata_slam_execution.md §3 のスキーマ。
+# preflight.* の値は S0 事前フライトチェックの実測値
+#   (output/RealData/_preflight/preflight_all.csv, 2026-08-17, commit 88d6ab3 + tools/realdata)。
+#
+# ★未確定★ -----------------------------------------------------------------
+# covers（どのスキャンが 411 / 410 / 廊下 か）は **計測から決められないため未確定**。
+# 指示書 §1 変更1 が想定した内訳（411単体3・410単体2・411+廊下2・411+410 2・411+410+廊下1）と
+# 実測の規模が一致しない：
+#   - 単室規模（床 α-shape ≈ 35 m2）は **2 本しかない**（想定は 3+2=5 本）
+#   - 4 本は直線方向に 37〜44 m 移動しており、教室 2 室ではなく**フロア規模の廊下走査**
+#   - 残り 4 本も床 α-shape 119〜183 m2 で、複数室にまたがる
+# したがって scene 名は**測定された規模から付けた暫定名**であり、411/410 を主張していない。
+# main の回答（どの scan_id がどの部屋か）を得てから確定させること。
+# --------------------------------------------------------------------------
+
+meta:
+  preflight_source: output/RealData/_preflight/preflight_all.csv
+  preflight_date: 2026-08-17
+  # 逆投影の条件（面積・天井判定の再現に必要）
+  preflight_params: {frame_stride: 15, pix_stride: 2, conf_min: 1, max_depth_m: 8.0, alpha_m: 0.5}
+  pose_convention: opencv   # 10 本すべてで OpenCV 解釈が OpenGL 解釈より NN 距離が小さい
+  scene_names_provisional: true
+
+scenes:
+  # --- 単室規模（床 α-shape ≈ 35 m2）------------------------------------
+  - scan_id: 707e94b9a5
+    scene: m3_room_a
+    covers: {room_411: null, room_410: null, corridor: false}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 37.96,
+                alpha_area_m2: 34.98, solidity: 0.922, n_frames: 1923,
+                start_end_dist_m: 5.22, est_run_min: 38}
+    note: "R2 報告で調査済みの 1 本目。ループ無し・廊下無し。"
+
+  - scan_id: a499702124
+    scene: m3_room_b
+    covers: {room_411: null, room_410: null, corridor: false}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 39.65,
+                alpha_area_m2: 35.20, solidity: 0.888, n_frames: 1968,
+                start_end_dist_m: 0.74, est_run_min: 39}
+    note: "始終点 0.74 m。0.5 m 閾値は僅かに超えるが実質ループに近い。"
+
+  # --- 複数室規模（床 α-shape 119〜183 m2・直線移動 15〜19 m）------------
+  - scan_id: 03d9034a38
+    scene: m3_block_a
+    covers: {room_411: null, room_410: null, corridor: null}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 164.32,
+                alpha_area_m2: 119.49, solidity: 0.727, n_frames: 3626,
+                start_end_dist_m: 7.91, est_run_min: 71}
+
+  - scan_id: fdbbcc52f1
+    scene: m3_block_b
+    covers: {room_411: null, room_410: null, corridor: null}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 163.29,
+                alpha_area_m2: 118.96, solidity: 0.728, n_frames: 5768,
+                start_end_dist_m: 2.13, est_run_min: 113}
+
+  - scan_id: b8ebcd8158
+    scene: m3_block_c
+    covers: {room_411: null, room_410: null, corridor: null}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 208.43,
+                alpha_area_m2: 175.19, solidity: 0.841, n_frames: 6926,
+                start_end_dist_m: 2.85, est_run_min: 136}
+
+  - scan_id: d02315a5e8
+    scene: m3_block_d
+    covers: {room_411: null, room_410: null, corridor: null}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 213.23,
+                alpha_area_m2: 182.57, solidity: 0.856, n_frames: 6129,
+                start_end_dist_m: 9.14, est_run_min: 121}
+
+  # --- 廊下を含むフロア規模（直線 37〜44 m）------------------------------
+  - scan_id: 5355665db1
+    scene: m3_cor_a
+    covers: {room_411: null, room_410: null, corridor: true}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 383.07,
+                alpha_area_m2: 208.47, solidity: 0.544, n_frames: 6274,
+                start_end_dist_m: 34.53, est_run_min: 123}
+    note: "始終点 34.5 m。廊下の端から端へ抜けて戻っていない。"
+
+  - scan_id: 5e2269a58d
+    scene: m3_cor_b
+    covers: {room_411: null, room_410: null, corridor: true}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 636.20,
+                alpha_area_m2: 247.52, solidity: 0.389, n_frames: 5436,
+                start_end_dist_m: 33.53, est_run_min: 107}
+    note: "始終点 33.5 m。同上。"
+
+  - scan_id: 6e4afbf6e6
+    scene: m3_cor_c
+    covers: {room_411: true, room_410: null, corridor: true}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: false, ceiling_ok: true, hull_area_m2: 601.09,
+                alpha_area_m2: 234.73, solidity: 0.391, n_frames: 8833,
+                start_end_dist_m: 5.56, est_run_min: 174}
+    note: "frame 5299 の扉の銘板に『実験室 M3-411』が写っており、411 を通ることは確認済み。
+           最長 8833 frame（1 run ≈ 2.9 h）。"
+
+  - scan_id: b17452f252
+    scene: m3_cor_d
+    covers: {room_411: null, room_410: null, corridor: true}
+    runs_planned: 1
+    status: pending
+    preflight: {loop_closed: true, ceiling_ok: true, hull_area_m2: 568.45,
+                alpha_area_m2: 288.09, solidity: 0.507, n_frames: 8453,
+                start_end_dist_m: 0.49, est_run_min: 166}
+    note: "10 本で唯一ループが閉じている（0.49 m）。床 α-shape も最大。
+           S1 の疎通確認に使う『最も情報量が多い 1 本』の第一候補。"
