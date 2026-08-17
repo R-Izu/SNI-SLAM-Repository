@@ -14,6 +14,43 @@ from src.utils.Frame_Visualizer import Frame_Visualizer
 from src.tools.cull_mesh import cull_mesh
 import wandb
 
+
+class LazyKeyframe(dict):
+    """color/depth を保持せず、要求されたときにデータセットから読み直す keyframe エントリ。
+
+    背景：`keyframe_dict` は 1 keyframe あたり color(680x1200x3 float32 = 9.8MB) と
+    depth(680x1200 float32 = 3.3MB) を CPU RAM に保持する。`keyframe_every: 4` だと
+    8452 frame の実データで 2113 keyframe = **27.6GB** となり、31GB の実機では
+    OOM killer に殺される（2026-08-17 実測。anon-rss 27.86GB で kill）。
+    Replica(2000 frame) では 500 keyframe = 6.5GB で収まるため顕在化していなかった。
+
+    `optimize_mapping` は `mapping_window_size: 5` 分しか同時に使わないので、
+    保持せず読み直しても計算量は増えない。**数値的には保持版と完全に同一**で、
+    置き場所だけが変わる。sem_feat が既にディスクへ退避されているのと同じ考え方
+    （`Mapper.__init__` の `_feat_cache_dir` のコメント参照）。
+
+    dict を継承して `__getitem__` だけ差し替えているので、読み出し側
+    （`Mapper.optimize_mapping`、`Mesher.get_bound_from_frames`）は無改造で動く。
+    """
+
+    def __init__(self, base, frame_reader):
+        super().__init__(base)
+        self._reader = frame_reader
+        self._cache_idx = None
+        self._cache = None
+
+    def __getitem__(self, key):
+        val = super().__getitem__(key)
+        if key not in ("color", "depth") or val is not None:
+            return val
+        idx = super().__getitem__("idx")
+        # color と depth は続けて要求されるので、1 エントリだけ憶えて二重デコードを避ける
+        if self._cache_idx != idx:
+            _, color, depth, _, _ = self._reader[idx]
+            self._cache_idx, self._cache = idx, (color, depth)
+        return self._cache[0] if key == "color" else self._cache[1]
+
+
 class Mapper(object):
     """
     Mapping main class.
@@ -116,6 +153,11 @@ class Mapper(object):
 
         self.keyframe_dict = []
         self.keyframe_list = []
+        # keyframe の color/depth の置き場所。
+        #   'ram'    従来どおり CPU RAM に保持（既定。Replica の挙動を変えない）
+        #   'reload' 保持せず、使うときにデータセットから読み直す（LazyKeyframe 参照）
+        # 長いシーケンス（数千フレーム）では 'reload' でないと OOM する。
+        self.keyframe_store = cfg['mapping'].get('keyframe_store', 'ram')
         # メモリ節約: sem_feat/gt_sem_labelをディスクにキャッシュし、RAMに保持しない
         # 全500フレーム分をRAMに保持すると~13GB消費するが、optimize_mappingでは
         # mapping_window_size=5しか使わないため、必要時にディスクからロードする
@@ -563,11 +605,12 @@ class Mapper(object):
             if idx % self.keyframe_every == 0:
                 self.keyframe_list.append(idx)
 
+                keep_images = (self.keyframe_store == 'ram')
                 frame_dict = {
                     'gt_c2w': gt_c2w.cpu().clone(),
                     'idx': idx,
-                    'color': gt_color.to(self.keyframe_device),
-                    'depth': gt_depth.to(self.keyframe_device),
+                    'color': gt_color.to(self.keyframe_device) if keep_images else None,
+                    'depth': gt_depth.to(self.keyframe_device) if keep_images else None,
                     # Fix: keyframe_dictに保存する前にCPUに転送（使用時にGPUに転送される）
                     'est_c2w': cur_c2w.cpu().clone(),
                 }
@@ -581,7 +624,11 @@ class Mapper(object):
                 frame_dict['sem_feat_path'] = feat_path
                 frame_dict['gt_sem_label_path'] = label_path
 
-                self.keyframe_dict.append(frame_dict)
+                if keep_images:
+                    self.keyframe_dict.append(frame_dict)
+                else:
+                    # color/depth は None のまま入れ、読まれた時点で読み直す
+                    self.keyframe_dict.append(LazyKeyframe(frame_dict, self.frame_reader))
 
             init_phase = False
             self.mapping_first_frame[0] = 1     # mapping of first frame is done, can begin tracking

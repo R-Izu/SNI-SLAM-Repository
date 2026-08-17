@@ -1,0 +1,21 @@
+# 自動生成: tools/realdata/convert_stray.py
+# scan_id: b17452f252 / mode: letterbox / generated: frame 23
+# 手で編集しないこと（再生成すると上書きされる）。
+inherit_from: configs/Replica/replica.yaml
+tracking:
+  ignore_edge_W: 150
+mapping:
+  bound: [[-35.786,6.578],[-1.586,1.627],[-12.645,1.883]]
+  marching_cubes_bound: [[-35.786,6.578],[-1.586,1.627],[-12.645,1.883]]
+cam:
+  H: 680
+  W: 1200
+  fx: 754.7717
+  fy: 754.7717
+  cx: 597.5350
+  cy: 339.9317
+  png_depth_scale: 1000.0
+  crop_edge: 0
+data:
+  input_folder: data/realdata_abtest/_ab_letterbox
+  output: output/RealData/_ab_letterbox/run1

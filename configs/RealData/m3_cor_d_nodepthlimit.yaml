@@ -1,0 +1,27 @@
+# 自動生成: tools/realdata/convert_stray.py
+# scan_id: b17452f252 / mode: anamorphic / generated: frame 8452
+# 手で編集しないこと（再生成すると上書きされる）。
+inherit_from: configs/Replica/replica.yaml
+mapping:
+  bound: [[-35.886,6.576],[-1.586,1.627],[-12.649,1.899]]
+  marching_cubes_bound: [[-35.886,6.576],[-1.586,1.627],[-12.649,1.899]]
+  # 実データは数千フレームあり、keyframe_every=4 だと keyframe の color/depth だけで
+  # 26.9 GB になる（2113 keyframe x 13.06 MB）。31 GB の実機では OOM するので
+  # RAM に保持せず読み直す。数値は保持版と同一（src/Mapper.py: LazyKeyframe）。
+  keyframe_store: reload
+  # 中間メッシュは毎回**全 keyframe** を TSDF 積分するため、フレーム数の二乗で効いてくる。
+  # 下流（precheck / Registration）が使うのは最終メッシュだけなので中間生成を止める。
+  # final_mesh_semantic.ply は idx == n_img-1 で mesh_freq に関係なく生成される。
+  mesh_freq: 100000
+cam:
+  H: 680
+  W: 1200
+  fx: 998.9625
+  fy: 754.7717
+  cx: 597.6199
+  cy: 339.9317
+  png_depth_scale: 1000.0
+  crop_edge: 0
+data:
+  input_folder: data/realdata/m3_cor_d_nodepthlimit
+  output: output/RealData/m3_cor_d_nodepthlimit/run1

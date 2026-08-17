@@ -1,0 +1,19 @@
+# 自動生成: tools/realdata/convert_stray.py
+# scan_id: b17452f252 / mode: anamorphic / generated: frame 20
+# 手で編集しないこと（再生成すると上書きされる）。
+inherit_from: configs/Replica/replica.yaml
+mapping:
+  bound: [[-34.927,6.077],[-1.593,0.719],[-11.912,1.754]]
+  marching_cubes_bound: [[-34.927,6.077],[-1.593,0.719],[-11.912,1.754]]
+cam:
+  H: 680
+  W: 1200
+  fx: 999.1037
+  fy: 754.8784
+  cx: 597.6511
+  cy: 339.9294
+  png_depth_scale: 1000.0
+  crop_edge: 0
+data:
+  input_folder: data/realdata_abtest/_abtest_anamorphic
+  output: output/RealData/_abtest_anamorphic/run1

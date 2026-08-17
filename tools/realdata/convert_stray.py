@@ -147,6 +147,14 @@ inherit_from: configs/Replica/replica.yaml
 {tracking_block}mapping:
   bound: [[{b00},{b01}],[{b10},{b11}],[{b20},{b21}]]
   marching_cubes_bound: [[{b00},{b01}],[{b10},{b11}],[{b20},{b21}]]
+  # 実データは数千フレームあり、keyframe_every=4 だと keyframe の color/depth だけで
+  # {kf_gb:.1f} GB になる（{n_kf} keyframe x 13.06 MB）。31 GB の実機では OOM するので
+  # RAM に保持せず読み直す。数値は保持版と同一（src/Mapper.py: LazyKeyframe）。
+  keyframe_store: reload
+  # 中間メッシュは毎回**全 keyframe** を TSDF 積分するため、フレーム数の二乗で効いてくる。
+  # 下流（precheck / Registration）が使うのは最終メッシュだけなので中間生成を止める。
+  # final_mesh_semantic.ply は idx == n_img-1 で mesh_freq に関係なく生成される。
+  mesh_freq: {mesh_freq}
 cam:
   H: {H}
   W: {W}
@@ -169,8 +177,10 @@ def write_config(path: str, scan_id: str, scene: str, mode: str, n_img: int,
     tracking_block = ""
     if mode == "letterbox":
         tracking_block = "tracking:\n  ignore_edge_W: 150\n"
+    n_kf = max(n_img // 4, 1)              # configs/SNI-SLAM.yaml: keyframe_every: 4
     txt = CONFIG_TEMPLATE.format(
         scan_id=scan_id, mode=mode, n_img=n_img, tracking_block=tracking_block,
+        n_kf=n_kf, kf_gb=n_kf * 13.06 / 1024.0, mesh_freq=max(n_img * 10, 100000),
         b00=bound[0][0], b01=bound[0][1], b10=bound[1][0], b11=bound[1][1],
         b20=bound[2][0], b21=bound[2][1], H=TARGET_H, W=TARGET_W,
         fx=intr["fx"], fy=intr["fy"], cx=intr["cx"], cy=intr["cy"],
@@ -212,10 +222,25 @@ def main() -> int:
                     help="depth だけを別条件で作り直す。RGB は再エンコードせず、"
                          "参照シーンの conversion_report.json からフレーム構成を引き継ぐ。"
                          "T-A3（depth 制限あり／なしの比較）用")
+    ap.add_argument("--regen-config", action="store_true",
+                    help="既存の conversion_report.json から config だけ書き直す。"
+                         "bound も画像も作り直さない（config テンプレートを変えたとき用）")
     args = ap.parse_args()
 
     t0 = time.time()
     scan_dir = os.path.join(args.root, args.scan)
+
+    if args.regen_config:
+        out_dir = os.path.join(args.out, args.scene)
+        with open(os.path.join(out_dir, "conversion_report.json")) as f:
+            prev = json.load(f)
+        cfg_path = os.path.join(args.config_dir, "%s.yaml" % args.scene)
+        write_config(cfg_path, prev["scan_id"], args.scene, prev["mode"],
+                     int(prev["n_frames_final"]), prev["bound"],
+                     prev["intrinsics_target"], input_folder=out_dir)
+        print("regenerated %s (n_img=%d, mode=%s)"
+              % (cfg_path, prev["n_frames_final"], prev["mode"]))
+        return 0
     out_dir = os.path.join(args.out, args.scene)
     rgb_dir, dep_dir = os.path.join(out_dir, "rgb"), os.path.join(out_dir, "depth")
     for d in (rgb_dir, dep_dir):
@@ -279,8 +304,13 @@ def main() -> int:
         for k in range(4)]
 
     # --- 4. bound ---
+    # --max-depth 0 は「depth を切らない」の意。逆投影側にそのまま渡すと
+    # 「0 m 未満だけ採用」になって点が1つも残らないため、健全な上限に読み替える
+    # （validate_scene_data.py の SANE_DEPTH_RANGE_M 上限と揃える）。
+    bp_max_depth = args.max_depth if args.max_depth > 0 else 20.0
+    rep["backproject_max_depth_m"] = bp_max_depth
     bound, binfo = compute_bound(scan_dir, odo, depth_files[:n], conf_files[:n],
-                                 c2w, args.conf_min, args.max_depth)
+                                 c2w, args.conf_min, bp_max_depth)
     rep["bound"], rep["bound_info"] = bound, binfo
     print("bound: %s (traj inside: %s)" % (bound, binfo["traj_inside_bound"]))
 
