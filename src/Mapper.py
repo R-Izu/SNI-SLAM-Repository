@@ -33,22 +33,28 @@ class LazyKeyframe(dict):
     （`Mapper.optimize_mapping`、`Mesher.get_bound_from_frames`）は無改造で動く。
     """
 
+    # ★キャッシュは「クラス変数で1件だけ」共有する。
+    # インスタンスごとに持たせると、一度読まれた keyframe が各自 color/depth を
+    # 抱え込み、結局 RAM 保持版と同じだけメモリを食って OOM に戻ってしまう。
+    # ここで避けたいのは「color の直後に depth を要求される二重デコード」だけなので、
+    # 直近1フレーム分（13 MB）を共有すれば足りる。
+    _cache_idx = None
+    _cache = None
+
     def __init__(self, base, frame_reader):
         super().__init__(base)
         self._reader = frame_reader
-        self._cache_idx = None
-        self._cache = None
 
     def __getitem__(self, key):
         val = super().__getitem__(key)
         if key not in ("color", "depth") or val is not None:
             return val
         idx = super().__getitem__("idx")
-        # color と depth は続けて要求されるので、1 エントリだけ憶えて二重デコードを避ける
-        if self._cache_idx != idx:
+        if LazyKeyframe._cache_idx != idx:
             _, color, depth, _, _ = self._reader[idx]
-            self._cache_idx, self._cache = idx, (color, depth)
-        return self._cache[0] if key == "color" else self._cache[1]
+            LazyKeyframe._cache_idx = idx
+            LazyKeyframe._cache = (color, depth)
+        return LazyKeyframe._cache[0] if key == "color" else LazyKeyframe._cache[1]
 
 
 class Mapper(object):
