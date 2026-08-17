@@ -222,6 +222,9 @@ def main() -> int:
                     help="depth だけを別条件で作り直す。RGB は再エンコードせず、"
                          "参照シーンの conversion_report.json からフレーム構成を引き継ぐ。"
                          "T-A3（depth 制限あり／なしの比較）用")
+    ap.add_argument("--traj-only", action="store_true",
+                    help="traj.txt だけ書き直す（姿勢規約の修正を既存シーンへ反映するため）。"
+                         "rgb/depth/semantic は触らない")
     ap.add_argument("--regen-config", action="store_true",
                     help="既存の conversion_report.json から config だけ書き直す。"
                          "bound も画像も作り直さない（config テンプレートを変えたとき用）")
@@ -229,6 +232,25 @@ def main() -> int:
 
     t0 = time.time()
     scan_dir = os.path.join(args.root, args.scan)
+
+    if args.traj_only:
+        # traj.txt だけ書き直す。rgb/depth/semantic は無関係なので触らない。
+        out_dir = os.path.join(args.out, args.scene)
+        with open(os.path.join(out_dir, "conversion_report.json")) as f:
+            prev = json.load(f)
+        odo = stray_io.read_odometry(os.path.join(args.root, prev["scan_id"]))
+        conv = prev.get("pose_convention", {}).get("adopted", "opencv")
+        c2w = stray_io.build_c2w(odo, convention=conv)
+        src = prev.get("source_frame_indices") or list(range(int(prev["n_frames_final"])))
+        with open(os.path.join(out_dir, "traj.txt"), "w") as f:
+            for i in src:
+                f.write(" ".join("%.9f" % v for v in c2w[i].reshape(-1)) + "\n")
+        prev["traj_convention"] = "opencv_c2w_raw (rewritten)"
+        prev["n_traj_lines"] = len(src)
+        with open(os.path.join(out_dir, "conversion_report.json"), "w") as f:
+            json.dump(prev, f, indent=2, ensure_ascii=False)
+        print("rewrote %s/traj.txt (%d lines, convention=%s)" % (out_dir, len(src), conv))
+        return 0
 
     if args.regen_config:
         out_dir = os.path.join(args.out, args.scene)
@@ -400,14 +422,27 @@ def main() -> int:
         rep["n_frames_final"] = len(written_src)
 
     # --- 6. traj.txt（実際に書けた RGB フレームに合わせる）---
-    # ローダ (src/utils/datasets.py:198-199) が col 1,2 を反転するので、先に反転して書く
+    # ★ traj.txt には **素の OpenCV c2w をそのまま**書く（反転しない）。
+    #
+    # 理由：ローダ `src/utils/datasets.py:199-200` は col 1,2 を反転するが、
+    # その出力は `src/common.py:90` の `dirs = [(i-cx)/fx, -(j-cy)/fy, -1]`
+    # （OpenGL 規約：カメラは -z を向き y は上）と組み合わせて使われる。
+    # OpenGL カメラ座標は OpenCV の y,z を反転したものなので
+    #     c2w_gl = c2w_cv @ diag(1,-1,-1)   （= col 1,2 の反転）
+    # であり、ローダの反転がちょうどこの変換を担う。
+    # したがってファイルに書くべきは c2w_cv そのものである。
+    #
+    # 当初は「ローダが反転するので先に反転して打ち消す」と考えて反転して書いていたが、
+    # これは二重反転で、SLAM から見るとカメラの y,z 軸が逆になる。
+    # 実測（m3_room_a の depth を SLAM と同じ規約で逆投影）：
+    #   反転して書いた場合   Y レンジ -1.00..3.54、最下面の法線 (0.127,0.988,0.084)
+    #   反転せず書いた場合   Y レンジ -1.15..1.40、最下面の法線 (0.004,1.000,0.001)
+    # 後者の Y スパン 2.55 m は S0 実測の天井高 2.577 m と一致する。
     with open(os.path.join(out_dir, "traj.txt"), "w") as f:
         for i in written_src:
-            m = c2w[i].copy()
-            m[:3, 1] *= -1
-            m[:3, 2] *= -1
-            f.write(" ".join("%.9f" % v for v in m.reshape(-1)) + "\n")
+            f.write(" ".join("%.9f" % v for v in c2w[i].reshape(-1)) + "\n")
     rep["n_traj_lines"] = len(written_src)
+    rep["traj_convention"] = "opencv_c2w_raw (loader flips cols 1,2 -> OpenGL for common.py dirs)"
 
     # --- 7. config ---
     cfg_path = os.path.join(args.config_dir, "%s.yaml" % args.scene)
