@@ -62,6 +62,11 @@ TRIALS = {
     # 手持ちの動きは急峻なので、等速度予測での初期化がむしろ外していないかを見る。
     # 症状（フレーム単位のジッタ）とよく合う仮説。
     "t9_no_const_speed":  {"const_speed_assumption": False},
+    # --- 追補3 A-0: 意味ブランチが幾何を汚染しているかの切り分け -------------
+    # SDF は幾何プレーンのみから決まる（decoders.py:109-114）が、RGB には意味プレーンが
+    # 入り（decoders.py:117）、トラッキングは色を最も重く使う（w_color=5）。
+    # mapping の意味損失を 0 にしてこの間接経路を切る。
+    "a0_no_semantic_loss": {"mapping.w_semantic": 0.0},
 }
 
 
@@ -98,8 +103,16 @@ def write_trial_config(base_cfg: str, out_cfg: str, scene_dir: str, out_dir: str
                        overrides: Dict) -> None:
     with open(base_cfg) as f:
         cfg = yaml.safe_load(f)
+    # キーは既定で tracking セクション。"mapping.w_semantic" のように
+    # "<section>.<key>" と書けば別セクションを上書きできる。
     cfg["tracking"] = dict(cfg.get("tracking", {}))
-    cfg["tracking"].update(overrides)
+    for k, v in overrides.items():
+        if "." in k:
+            sec, key = k.split(".", 1)
+            cfg[sec] = dict(cfg.get(sec, {}))
+            cfg[sec][key] = v
+        else:
+            cfg["tracking"][k] = v
     cfg["data"] = {"input_folder": scene_dir, "output": out_dir}
     with open(out_cfg, "w") as f:
         f.write("# 自動生成: tools/realdata/tune_tracking.py（探索用。手で編集しない）\n")

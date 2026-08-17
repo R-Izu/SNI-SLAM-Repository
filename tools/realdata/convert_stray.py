@@ -155,7 +155,7 @@ inherit_from: configs/Replica/replica.yaml
   # 下流（precheck / Registration）が使うのは最終メッシュだけなので中間生成を止める。
   # final_mesh_semantic.ply は idx == n_img-1 で mesh_freq に関係なく生成される。
   mesh_freq: {mesh_freq}
-cam:
+{func_block}cam:
   H: {H}
   W: {W}
   fx: {fx:.4f}
@@ -172,15 +172,26 @@ data:
 
 def write_config(path: str, scan_id: str, scene: str, mode: str, n_img: int,
                  bound: List[List[float]], intr: Dict[str, float],
-                 input_folder: str) -> None:
+                 input_folder: str, use_gt_pose: bool = False) -> None:
     # letterbox は左右に無効帯が出るので、トラッキングの画素サンプルを端から避ける
     tracking_block = ""
     if mode == "letterbox":
         tracking_block = "tracking:\n  ignore_edge_W: 150\n"
+    # フォールバック D（追補3 §4）: ARKit 姿勢をそのまま使い、マッピングのみ行う。
+    # src/Tracker.py:300 が `if idx == 0 or self.use_gt_pose: c2w = gt_c2w` としており、
+    # 姿勢最適化のループごとスキップされる。コード変更は不要。
+    func_block = ""
+    if use_gt_pose:
+        func_block = ("func:\n"
+                      "  # ARKit VIO の姿勢をそのまま使う（トラッキングは実行されない）。\n"
+                      "  # このとき eval_ate は推定=GT となり値が意味を持たないので、\n"
+                      "  # マップの評価は depth 支持率と precheck で行うこと。\n"
+                      "  use_gt_pose: True\n")
     n_kf = max(n_img // 4, 1)              # configs/SNI-SLAM.yaml: keyframe_every: 4
     txt = CONFIG_TEMPLATE.format(
         scan_id=scan_id, mode=mode, n_img=n_img, tracking_block=tracking_block,
         n_kf=n_kf, kf_gb=n_kf * 13.06 / 1024.0, mesh_freq=max(n_img * 10, 100000),
+        func_block=func_block,
         b00=bound[0][0], b01=bound[0][1], b10=bound[1][0], b11=bound[1][1],
         b20=bound[2][0], b21=bound[2][1], H=TARGET_H, W=TARGET_W,
         fx=intr["fx"], fy=intr["fy"], cx=intr["cx"], cy=intr["cy"],
@@ -222,6 +233,9 @@ def main() -> int:
                     help="depth だけを別条件で作り直す。RGB は再エンコードせず、"
                          "参照シーンの conversion_report.json からフレーム構成を引き継ぐ。"
                          "T-A3（depth 制限あり／なしの比較）用")
+    ap.add_argument("--use-gt-pose", action="store_true",
+                    help="生成する config に func.use_gt_pose: True を入れる。"
+                         "ARKit 姿勢でマッピングのみ行う（追補3 §4 のフォールバック D）")
     ap.add_argument("--traj-only", action="store_true",
                     help="traj.txt だけ書き直す（姿勢規約の修正を既存シーンへ反映するため）。"
                          "rgb/depth/semantic は触らない")
@@ -259,7 +273,8 @@ def main() -> int:
         cfg_path = os.path.join(args.config_dir, "%s.yaml" % args.scene)
         write_config(cfg_path, prev["scan_id"], args.scene, prev["mode"],
                      int(prev["n_frames_final"]), prev["bound"],
-                     prev["intrinsics_target"], input_folder=out_dir)
+                     prev["intrinsics_target"], input_folder=out_dir,
+                     use_gt_pose=args.use_gt_pose)
         print("regenerated %s (n_img=%d, mode=%s)"
               % (cfg_path, prev["n_frames_final"], prev["mode"]))
         return 0
@@ -447,7 +462,8 @@ def main() -> int:
     # --- 7. config ---
     cfg_path = os.path.join(args.config_dir, "%s.yaml" % args.scene)
     write_config(cfg_path, args.scan, args.scene, args.mode, len(written_src), bound, geom,
-                 input_folder=os.path.join(args.out, args.scene))
+                 input_folder=os.path.join(args.out, args.scene),
+                 use_gt_pose=args.use_gt_pose)
     rep["config_path"] = cfg_path
     rep["input_folder"] = out_dir
     rep["elapsed_s"] = round(time.time() - t0, 1)
