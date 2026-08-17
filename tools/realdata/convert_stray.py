@@ -208,6 +208,10 @@ def main() -> int:
     ap.add_argument("--png-compress", type=int, default=3)
     ap.add_argument("--skip-images", action="store_true",
                     help="traj/config/report だけ作り直す")
+    ap.add_argument("--depth-only", metavar="REF_SCENE_DIR", default=None,
+                    help="depth だけを別条件で作り直す。RGB は再エンコードせず、"
+                         "参照シーンの conversion_report.json からフレーム構成を引き継ぐ。"
+                         "T-A3（depth 制限あり／なしの比較）用")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -285,7 +289,34 @@ def main() -> int:
     # rgb.mp4 のコンテナメタデータ (CAP_PROP_FRAME_COUNT) は実デコード数と 1 ずれることがある
     # （b17452f252 で実測: メタデータ 8453 / 実デコード 8452）。
     written_src: List[int] = list(sel)
-    if not args.skip_images:
+
+    if args.depth_only:
+        # 参照シーンと同じフレーム構成で depth だけを別条件で書き直す
+        with open(os.path.join(args.depth_only, "conversion_report.json")) as f:
+            ref = json.load(f)
+        written_src = list(ref.get("source_frame_indices")
+                           or range(int(ref["n_frames_final"])))
+        rep["depth_only_ref"] = args.depth_only
+        rep["n_frames_final"] = len(written_src)
+        zero_frac = []
+        png = [cv2.IMWRITE_PNG_COMPRESSION, args.png_compress]
+        for out_i, i in enumerate(written_src):
+            d16 = cv2.imread(depth_files[i], cv2.IMREAD_UNCHANGED)
+            cf = cv2.imread(conf_files[i], cv2.IMREAD_UNCHANGED)
+            bad = (cf < args.conf_min) | (d16 == 0)
+            if args.max_depth > 0:
+                bad |= d16 > int(args.max_depth * stray_io.DEPTH_SCALE)
+            d16 = d16.copy()
+            d16[bad] = 0
+            dd = resize_depth(d16, args.mode, geom)
+            zero_frac.append(float(np.count_nonzero(dd == 0) / dd.size))
+            cv2.imwrite(os.path.join(dep_dir, "depth_%d.png" % out_i), dd, png)
+            if (out_i + 1) % 1000 == 0:
+                print("  depth %d/%d (%.0fs)" % (out_i + 1, len(written_src),
+                                                 time.time() - t0), flush=True)
+        rep["depth_invalid_frac_mean"] = round(float(np.mean(zero_frac)), 4)
+        os.rmdir(rgb_dir) if not os.listdir(rgb_dir) else None
+    elif not args.skip_images:
         cap = cv2.VideoCapture(os.path.join(scan_dir, "rgb.mp4"))
         png = [cv2.IMWRITE_PNG_COMPRESSION, args.png_compress]
         want = {v: j for j, v in enumerate(sel)}
