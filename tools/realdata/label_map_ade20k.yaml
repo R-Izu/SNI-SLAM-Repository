@@ -1,0 +1,36 @@
+# ADE20K (150 クラス) -> Replica 生ID の対応表
+#
+# 出力 PNG の画素値は seg/semantic_classes.pkl の実測値
+#   [0, 93, 37, 40, 97, 31] = background, wall, door, floor, window, ceiling
+# でなければならない（src/utils/datasets.py:97-104 がこの生ID を index へ remap する）。
+# ここに書かれていない ADE20K クラスはすべて background(0) になる。
+#
+# ADE20K の id は 0 始まり（"wall" が 0）。HuggingFace の ade-semantic 系モデルの
+# 出力 index と同じ並びであることを gen_labels_ade20k.py が起動時に id2label で検証する。
+
+replica_ids:
+  background: 0
+  wall: 93
+  door: 37
+  floor: 40
+  window: 97
+  ceiling: 31
+
+# ade20k_id: replica_class
+mapping:
+  0: wall        # wall
+  3: floor       # floor
+  5: ceiling     # ceiling
+  8: window      # windowpane;window
+  14: door       # door;double;door
+
+# 対応表に載せるか迷ったクラスと、載せなかった理由。
+# 変えるときは根拠を書いてから変えること（S2 の A/B ゲートで判断する）。
+notes:
+  - "28 (rug;carpet) は floor に入れていない。Replica GT の floor は床スラブ面であり、
+     敷物を床に含めると BIM 床面との対応がずれるため。"
+  - "1 (building) / 25 (house) は屋内スキャンでは誤検出の受け皿になりやすいので入れない。"
+  - "43 (pillar) / 94 (pole) を wall に入れると柱が壁扱いになる。垂直面という意味では
+     手法の前提に合うが、BIM 側の IfcWall とは対応しないので入れない。"
+  - "全ての什器（机・椅子・棚・PC）は background(0) になる。これは 6 クラス構成の帰結で、
+     報告 Q7 の論点。"
