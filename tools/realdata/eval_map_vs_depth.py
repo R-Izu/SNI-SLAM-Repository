@@ -38,6 +38,7 @@ import glob
 import json
 import os
 import re
+import sys
 from typing import Dict, List
 
 import cv2
@@ -87,8 +88,12 @@ def main() -> int:
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    with open(args.config) as f:
-        cam = yaml.safe_load(f)["cam"]
+    # config は inherit_from の連鎖を持つので、リポジトリのローダで解決する
+    # （Replica 系は cam を replica.yaml から継承しており、葉だけ読むと足りない）
+    sys.path.insert(0, os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..")))
+    from src import config as sni_config
+    cam = sni_config.load_config(args.config, "configs/SNI-SLAM.yaml")["cam"]
     fx, fy, cx, cy = cam["fx"], cam["fy"], cam["cx"], cam["cy"]
 
     mesh_path = args.mesh or os.path.join(args.run, "mesh", "final_mesh_semantic.ply")

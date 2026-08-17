@@ -48,7 +48,7 @@ WORLD_UP = np.array([0.0, 1.0, 0.0])     # 変換器が書く traj は ARKit 系
 
 
 def plane_diversity(cloud, up: np.ndarray, min_frac: float = 0.05,
-                    sep_deg: float = 20.0) -> Dict[str, object]:
+                    sep_deg: float = 20.0, bin_deg: float = 5.0) -> Dict[str, object]:
     """可視壁面の水平方向（ヨー）の種類数を数える。
 
     壁法線を重力軸に直交する平面へ射影し、ヨー角のヒストグラム（180° 周期。
@@ -71,7 +71,10 @@ def plane_diversity(cloud, up: np.ndarray, min_frac: float = 0.05,
     # 重力軸に直交する基底でヨー角へ
     e1, e2 = rotation._horizontal_basis(up)
     yaw = np.degrees(np.arctan2(horiz @ e2, horiz @ e1)) % 180.0
-    hist, edges = np.histogram(yaw, bins=180, range=(0.0, 180.0))
+    # ビン幅は 5°。1° ビンだと実測の法線ノイズ（±10° 程度）で山が広がり、
+    # どの単一ビンも min_frac に届かず「0 方向」と誤判定する（実際に一度そうなった）。
+    nbins = int(round(180.0 / bin_deg))
+    hist, edges = np.histogram(yaw, bins=nbins, range=(0.0, 180.0))
     frac = hist / max(hist.sum(), 1)
 
     order = np.argsort(hist)[::-1]
@@ -90,6 +93,9 @@ def plane_diversity(cloud, up: np.ndarray, min_frac: float = 0.05,
         "direction_fracs": [round(f, 4) for f in picked_frac],
         "n_wall_points": int(len(w)),
         "n_wall_points_vertical": int(keep.sum()),
+        "bin_deg": bin_deg,
+        "min_frac": min_frac,
+        "top_bin_fracs": [round(float(v), 4) for v in np.sort(frac)[::-1][:6]],
     }
 
 
