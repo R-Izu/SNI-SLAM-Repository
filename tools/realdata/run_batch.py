@@ -85,6 +85,12 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="実行計画（対象シーンと順序）を出すだけで、何も実行しない")
     ap.add_argument("--out-csv", default="output/RealData/summary_realdata.csv")
+    ap.add_argument("--config-dir", default="configs/RealData",
+                    help="使う config の置き場。フォールバック D なら configs/RealData/_D")
+    ap.add_argument("--out-root", default="output/RealData",
+                    help="出力の置き場。D なら output/RealData/_D")
+    ap.add_argument("--project-labels", action="store_true",
+                    help="run 後に 2D ラベルをメッシュへ投影する（追補3 §3）")
     args = ap.parse_args()
 
     os.chdir(REPO)
@@ -166,14 +172,14 @@ def main() -> int:
 
         # ---------------- SLAM ----------------
         for r in range(1, n_runs + 1):
-            out_dir = "output/RealData/%s/run%d" % (scene, r)
+            out_dir = "%s/%s/run%d" % (args.out_root, scene, r)
             ate_path = os.path.join(out_dir, "eval_ate.json")
             if args.resume and os.path.exists(ate_path):
                 print("  run%d: skip (eval_ate.json exists)" % r)
             else:
                 t = time.time()
-                rc = sh("python -W ignore run.py configs/RealData/%s.yaml --output %s"
-                        % (scene, out_dir), "sni-slam",
+                rc = sh("python -W ignore run.py %s/%s.yaml --output %s"
+                        % (args.config_dir, scene, out_dir), "sni-slam",
                         "%s/slam_%s_run%d.log" % (log_dir, scene, r))
                 elapsed = time.time() - t
                 print("  run%d rc=%d (%.0f min)" % (r, rc, elapsed / 60))
@@ -182,12 +188,19 @@ def main() -> int:
                                  "elapsed_min": round(elapsed / 60, 1),
                                  "git_head": head, "seed": "none"})
                     continue
-                sh("python src/tools/eval_ate.py configs/RealData/%s.yaml --output %s"
-                   % (scene, out_dir), "sni-slam",
+                sh("python src/tools/eval_ate.py %s/%s.yaml --output %s"
+                   % (args.config_dir, scene, out_dir), "sni-slam",
                    "%s/ate_%s_run%d.log" % (log_dir, scene, r))
                 sh("python tools/realdata/precheck_scene.py --mesh %s/mesh/final_mesh_semantic.ply "
                    "--traj-gt %s/traj.txt --est-poses %s/ckpts --scene %s --out %s/precheck_%s.json"
                    % (out_dir, scene_dir, out_dir, scene, out_dir, scene), "sni-slam")
+                if args.project_labels:
+                    # 追補3 §3: SNI-SLAM の意味フィールドを使わず 2D ラベルを投影する
+                    sh("python tools/realdata/project_labels_to_mesh.py "
+                       "--mesh %s/mesh/final_mesh_semantic.ply --scene-dir %s --config %s/%s.yaml "
+                       "--out %s/mesh/final_mesh_semantic_projected.ply --frame-stride 8"
+                       % (out_dir, scene_dir, args.config_dir, scene, out_dir), "sni-slam",
+                       "%s/project_%s.log" % (log_dir, scene))
                 if not args.keep_feat_cache:
                     fc = os.path.join(out_dir, "feat_cache")
                     if os.path.isdir(fc):
@@ -196,6 +209,8 @@ def main() -> int:
 
             ate = read_json(ate_path)
             pre = read_json(os.path.join(out_dir, "precheck_%s.json" % scene))
+            proj = read_json(os.path.join(
+                out_dir, "mesh", "final_mesh_semantic_projected_report.json"))
             rows.append({
                 "scene": scene, "scan_id": scan, "run": r, "status": "ok",
                 "n_frames": conv.get("n_frames_final"),
@@ -209,6 +224,11 @@ def main() -> int:
                 "slam_start_end_m": (pre.get("drift") or {}).get("slam_start_end_m"),
                 "arkit_start_end_m": (pre.get("drift") or {}).get("arkit_start_end_m"),
                 "validate_pass": val.get("ok", val.get("passed")),
+                "gravity_ok": pre.get("gravity_ok"),
+                "wall_dirs_deg": (pre.get("plane_diversity") or {}).get("directions_deg"),
+                "proj_voted_frac": proj.get("vertices_with_votes_frac"),
+                "proj_class_frac": proj.get("class_fraction_voted_only"),
+                "config_dir": args.config_dir,
                 "git_head": head, "seed": "none",
             })
 
