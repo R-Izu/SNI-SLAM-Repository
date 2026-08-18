@@ -57,11 +57,19 @@ def git_head() -> str:
 
 
 def read_json(path: str) -> Dict:
+    """JSON を dict として読む。
+
+    `validate_scene_data.py` は**シーンごとの dict を要素とするリスト**を書くので
+    （複数シーン一括チェックに対応しているため）、要素が1つならそれを取り出す。
+    """
     try:
         with open(path) as f:
-            return json.load(f)
+            d = json.load(f)
     except Exception:
         return {}
+    if isinstance(d, list):
+        return d[0] if len(d) == 1 and isinstance(d[0], dict) else {"entries": d}
+    return d if isinstance(d, dict) else {}
 
 
 def main() -> int:
@@ -223,7 +231,12 @@ def main() -> int:
                 "plane_diversity": (pre.get("plane_diversity") or {}).get("n_directions"),
                 "slam_start_end_m": (pre.get("drift") or {}).get("slam_start_end_m"),
                 "arkit_start_end_m": (pre.get("drift") or {}).get("arkit_start_end_m"),
-                "validate_pass": val.get("ok", val.get("passed")),
+                "validate_counts_match": val.get("counts_match"),
+                "validate_rgb_res_ok": val.get("rgb_resolution_ok"),
+                "validate_depth_res_ok": val.get("depth_resolution_ok"),
+                "validate_depth_range_ok": val.get("depth_range_ok"),
+                "structural_pixel_share": (val.get("semantic") or {}).get(
+                    "structural_pixel_share"),
                 "gravity_ok": pre.get("gravity_ok"),
                 "wall_dirs_deg": (pre.get("plane_diversity") or {}).get("directions_deg"),
                 "proj_voted_frac": proj.get("vertices_with_votes_frac"),
