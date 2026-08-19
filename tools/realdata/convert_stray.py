@@ -50,6 +50,9 @@ import preflight  # noqa: E402
 TARGET_W, TARGET_H = 1200, 680      # configs/Replica/replica.yaml の cam.W / cam.H
 BOUND_MARGIN_M = 0.3
 NN_MEDIAN_MAX_M = 0.08              # 指示書 S1 受入条件
+# marching cubes の解像度。全シーン共通（追補3 §1 の「設定を凍結」に従う）。
+# 下流の Registration が preprocess.voxel_size: 0.05 で間引くのでこれで足りる。
+MESHING_RESOLUTION_M = 0.04
 FLOOR_NORMAL_MAX_DEG = 3.0          # 同上
 
 
@@ -155,6 +158,15 @@ inherit_from: configs/Replica/replica.yaml
   # 下流（precheck / Registration）が使うのは最終メッシュだけなので中間生成を止める。
   # final_mesh_semantic.ply は idx == n_img-1 で mesh_freq に関係なく生成される。
   mesh_freq: {mesh_freq}
+meshing:
+  # marching cubes の解像度。**全シーン一律 {res}**（シーン別に変えない）。
+  # configs/Replica/replica.yaml の 0.01（1 cm）のままだと、廊下を含む大きな bound
+  # （このシーンは {vol:.0f} m^3）で最終メッシュ生成が OOM する（実測で 3 本が未完了）。
+  # 一律値にする理由: 追補3 §1 が「決定したら凍結して全シーンに同じ config を適用」と
+  # 定めており、シーンごとに解像度を変えると再構成の細かさが揃わず比較できなくなる。
+  # {res} を選ぶ根拠: 下流の Registration が preprocess.voxel_size: 0.05 で間引くため
+  # これより細かくしても位置合わせの精度は上がらない。最大の bound でも点数が収まる。
+  resolution: {res}
 {func_block}cam:
   H: {H}
   W: {W}
@@ -188,10 +200,16 @@ def write_config(path: str, scan_id: str, scene: str, mode: str, n_img: int,
                       "  # マップの評価は depth 支持率と precheck で行うこと。\n"
                       "  use_gt_pose: True\n")
     n_kf = max(n_img // 4, 1)              # configs/SNI-SLAM.yaml: keyframe_every: 4
+    # marching cubes の解像度は全シーン一律（詳細はテンプレートのコメント）。
+    # vol はコメントに載せる情報としてのみ使う。
+    vol = 1.0
+    for k in range(3):
+        vol *= max(bound[k][1] - bound[k][0], 1e-6)
+    res = MESHING_RESOLUTION_M
     txt = CONFIG_TEMPLATE.format(
         scan_id=scan_id, mode=mode, n_img=n_img, tracking_block=tracking_block,
         n_kf=n_kf, kf_gb=n_kf * 13.06 / 1024.0, mesh_freq=max(n_img * 10, 100000),
-        func_block=func_block,
+        func_block=func_block, vol=vol, res=res,
         b00=bound[0][0], b01=bound[0][1], b10=bound[1][0], b11=bound[1][1],
         b20=bound[2][0], b21=bound[2][1], H=TARGET_H, W=TARGET_W,
         fx=intr["fx"], fy=intr["fy"], cx=intr["cx"], cy=intr["cy"],
