@@ -99,6 +99,9 @@ def main() -> int:
                     help="出力の置き場。D なら output/RealData/_D")
     ap.add_argument("--project-labels", action="store_true",
                     help="run 後に 2D ラベルをメッシュへ投影する（追補3 §3）")
+    ap.add_argument("--use-gt-pose", action="store_true",
+                    help="config-dir に config が無いとき、フォールバック D 用"
+                         "（func.use_gt_pose: True）として生成する")
     args = ap.parse_args()
 
     os.chdir(REPO)
@@ -165,6 +168,21 @@ def main() -> int:
             lab = read_json(lab_path)
             if rc != 0:
                 rows.append({"scene": scene, "run": "-", "status": "labels_failed"})
+                continue
+
+        # ---------------- config の用意 ----------------
+        # convert_stray.py は A 用（configs/RealData/）にしか config を書かないので、
+        # D 用ディレクトリを指定しているときはここで生成する。
+        # これを忘れると SLAM 直前に FileNotFoundError で落ちる（実際に落ちた）。
+        cfg_path = "%s/%s.yaml" % (args.config_dir, scene)
+        if not os.path.exists(cfg_path):
+            rc = sh("python tools/realdata/convert_stray.py --scene %s --scan %s "
+                    "--regen-config --out data/realdata --config-dir %s%s"
+                    % (scene, scan, args.config_dir,
+                       " --use-gt-pose" if args.use_gt_pose else ""), "sni-slam")
+            print("  config generated: %s (rc=%d)" % (cfg_path, rc))
+            if not os.path.exists(cfg_path):
+                rows.append({"scene": scene, "run": "-", "status": "config_missing"})
                 continue
 
         # ---------------- 契約チェック ----------------
