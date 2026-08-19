@@ -40,6 +40,7 @@ import glob
 import json
 import os
 import re
+import sys
 import time
 from typing import Dict, List
 
@@ -90,8 +91,12 @@ def main() -> int:
     args = ap.parse_args()
 
     t0 = time.time()
-    with open(args.config) as f:
-        cam = yaml.safe_load(f)["cam"]
+    # config は inherit_from の連鎖を持つため、リポジトリのローダで解決する
+    # （Replica 系は cam を replica.yaml から継承しており、葉だけ読むと足りない）
+    sys.path.insert(0, os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..")))
+    from src import config as sni_config
+    cam = sni_config.load_config(args.config, "configs/SNI-SLAM.yaml")["cam"]
     fx, fy, cx, cy = cam["fx"], cam["fy"], cam["cx"], cam["cy"]
     H, W = cam["H"], cam["W"]
 
