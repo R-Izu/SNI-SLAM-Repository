@@ -4,7 +4,8 @@ cd "$(dirname "$0")/../.."
 printf "%-12s %8s %12s %10s\n" scene frames elapsed s/frame
 printf -- "----------------------------------------------\n"
 tot=0
-for s in m3_room_a m3_room_b m3_block_a m3_cor_b m3_block_b m3_block_d; do
+SCENES="${*:-m3_room_a m3_room_b m3_block_a m3_cor_b m3_block_b m3_block_d m3_cor_a m3_block_c m3_cor_d m3_cor_c}"
+for s in $SCENES; do
   f="output/RealData/_logs/slam_${s}_run1.log"
   [ -f "$f" ] || { printf "%-12s (ログ無し)\n" "$s"; continue; }
   # ★ "Tracking Frame" を含む行だけを見る。ログ末尾には cull_mesh の進捗バーも
