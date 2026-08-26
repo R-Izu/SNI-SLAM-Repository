@@ -47,7 +47,8 @@ ROT_CFG = {"rotation": {"ransac_iters": 1000, "ransac_normal_thresh_deg": 5.0,
 WORLD_UP = np.array([0.0, 1.0, 0.0])     # 変換器が書く traj は ARKit 系（+Y が上）
 
 
-def plane_diversity(cloud, up: np.ndarray, min_frac: float = 0.05,
+def plane_diversity(cloud, up: np.ndarray, rel_frac: float = 0.5,
+                    abs_floor: float = 0.02,
                     sep_deg: float = 20.0, bin_deg: float = 5.0) -> Dict[str, object]:
     """可視壁面の水平方向（ヨー）の種類数を数える。
 
@@ -77,11 +78,18 @@ def plane_diversity(cloud, up: np.ndarray, min_frac: float = 0.05,
     hist, edges = np.histogram(yaw, bins=nbins, range=(0.0, 180.0))
     frac = hist / max(hist.sum(), 1)
 
+    # ★閾値は最大ビンに対する**相対値**にする。
+    # 絶対値（例 5%）だと、意味場が壁を過剰にラベルしたシーンで
+    # 余計な点が混ざって山が薄まり、真の壁方向まで閾値を割ってしまう。
+    # 実例: m3_block_b（L字の M3-411・壁ラベルが全点の 67%）で上位ビンが
+    # 0.049/0.047/0.043… と 5% のわずかに下に並び、0 方向と誤判定した。
+    thr = max(rel_frac * float(frac.max()), abs_floor)
+
     order = np.argsort(hist)[::-1]
     picked: List[float] = []
     picked_frac: List[float] = []
     for k in order:
-        if frac[k] < min_frac:
+        if frac[k] < thr:
             break
         c = float((edges[k] + edges[k + 1]) / 2.0)
         if all(min(abs(c - p), 180.0 - abs(c - p)) >= sep_deg for p in picked):
@@ -94,7 +102,14 @@ def plane_diversity(cloud, up: np.ndarray, min_frac: float = 0.05,
         "n_wall_points": int(len(w)),
         "n_wall_points_vertical": int(keep.sum()),
         "bin_deg": bin_deg,
-        "min_frac": min_frac,
+        "rel_frac": rel_frac,
+        "abs_floor": abs_floor,
+        "threshold_used": round(float(thr), 4),
+        # ★閾値に依存しない量。最大ビンが一様分布の何倍か。
+        # n_directions は閾値の取り方で 0 にも 5 にもなり不安定だったので、
+        # 解釈にはこちらを使う。1 に近い＝壁方向が定まっていない。
+        "concentration_vs_uniform": round(float(frac.max() * nbins), 2),
+        "n_bins": nbins,
         "top_bin_fracs": [round(float(v), 4) for v in np.sort(frac)[::-1][:6]],
     }
 
