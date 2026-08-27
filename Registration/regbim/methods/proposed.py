@@ -67,6 +67,60 @@ def _axis_span(points: np.ndarray, labels: np.ndarray, class_ids: List[int],
     return 0.5 * (lo + hi), float(hi - lo)
 
 
+def seed_scale(src_span: Dict, dst_span: Dict, axes, scale_init: str) -> float:
+    """Initial isotropic scale from per-axis structural extents.
+
+    Split out of ``_plane_seed`` so the partial-coverage study (R3 T3) can record
+    the seeded scale without re-implementing it -- a second copy would drift from
+    this one, and the study would then be measuring the copy.
+
+    ``median_axes`` (default, unchanged)
+        Median of all informative per-axis extent ratios.
+
+    ``vertical_only``
+        Only the up axis (floor/ceiling span = room height). When the reference
+        is a BIM of one or two rooms while the source is a SLAM map covering
+        those rooms *plus* a corridor, the two horizontal extents disagree by
+        2-3x and the vertical one does not: a storey's height is invariant to how
+        much of the floor plan the reference covers. A median over three axes
+        then picks a wrong axis two times out of three. The cost is that scale
+        rests on a single scalar, so floor/ceiling noise goes straight into it
+        -- quantified in T3.
+    """
+    if scale_init == "vertical_only":
+        use = {"up"}
+    elif scale_init == "median_axes":
+        use = {k for k, _, _ in axes}
+    else:
+        raise ValueError("unknown proposed.scale_init: %r" % scale_init)
+
+    ratios = [dst_span[k][1] / src_span[k][1]
+              for k, _, _ in axes
+              if k in use and dst_span[k] is not None and src_span[k] is not None
+              and src_span[k][1] > _MIN_EXTENT and dst_span[k][1] > _MIN_EXTENT]
+    # Same fallback as before (1.0) when no axis is informative. Deliberately NOT
+    # falling back to median_axes: that would silently reinstate the behaviour
+    # this option exists to avoid, and hide it from the report.
+    return float(np.clip(np.median(ratios), *_SCALE_CLIP)) if ratios else 1.0
+
+
+def canonical_axes(dst_p: LabeledCloud, cfg: Dict):
+    """Reference canonical axes as ``[(key, unit_vector, class_ids)]``.
+
+    Rows are wall-x, wall-y, up -- the frame each rotation candidate maps the
+    source into. Shared with R3 T3 for the same reason as ``seed_scale``.
+    """
+    Rr = rotation.canonical_rotation(dst_p, cfg)
+    wall = [NAME_TO_ID["wall"]]
+    floor_ceiling = [NAME_TO_ID["floor"], NAME_TO_ID["ceiling"]]
+    return [("x", Rr[0], wall), ("y", Rr[1], wall), ("up", Rr[2], floor_ceiling)]
+
+
+def axis_spans(points: np.ndarray, labels: np.ndarray, axes) -> Dict:
+    """``{key: (center, extent)}`` for the given canonical axes."""
+    return {k: _axis_span(points, labels, ids, e) for k, e, ids in axes}
+
+
 def _struct_centroid(points: np.ndarray, labels: np.ndarray,
                      struct_ids: List[int]) -> np.ndarray:
     mask = np.isin(labels, struct_ids)
@@ -89,8 +143,6 @@ class Proposed(BaseRegistration):
         abl = cfg.get("ablation") or {}
 
         struct_ids = [NAME_TO_ID[n] for n in cfg["classes"]["structural"]]
-        floor_ceiling = [NAME_TO_ID["floor"], NAME_TO_ID["ceiling"]]
-        wall = [NAME_TO_ID["wall"]]
 
         if abl.get("no_gravity"):
             # Ablation: drop the whole physical-constraint stage (gravity
@@ -117,12 +169,8 @@ class Proposed(BaseRegistration):
         else:
             src_score, dst_score = src_p, dst_p
 
-        # Reference canonical axes (rows: wall-x, wall-y, up) in the reference's
-        # own frame -- the frame each rotation candidate maps the source into.
-        Rr = rotation.canonical_rotation(dst_p, cfg)
-        axes = [("x", Rr[0], wall), ("y", Rr[1], wall), ("up", Rr[2], floor_ceiling)]
-        dst_span = {k: _axis_span(dst_p.points, dst_p.labels, ids, e)
-                    for k, e, ids in axes}
+        axes = canonical_axes(dst_p, cfg)
+        dst_span = axis_spans(dst_p.points, dst_p.labels, axes)
         c_dst = _struct_centroid(dst_p.points, dst_p.labels, struct_ids)
 
         # --- stage 1: plane-seeded search -> reliable yaw R and scale s ----------
@@ -136,7 +184,9 @@ class Proposed(BaseRegistration):
             c_src = _struct_centroid(src_rot, src_p.labels, struct_ids)
             init_T = self._plane_seed(src_rot, src_p.labels, R, axes, dst_span,
                                       c_dst, c_src,
-                                      fixed_scale=bool(abl.get("fixed_scale")))
+                                      fixed_scale=bool(abl.get("fixed_scale")),
+                                      scale_init=str((cfg.get("proposed") or {})
+                                                     .get("scale_init", "median_axes")))
             # Each yaw candidate gets its own tracer; only the winner's trajectory
             # is surfaced, so the reported curve is a single coherent ICP run.
             cand_tracer = Tracer(tracer.stride) if tracer is not None else None
@@ -168,17 +218,11 @@ class Proposed(BaseRegistration):
     @staticmethod
     def _plane_seed(src_rot: np.ndarray, labels: np.ndarray, R: np.ndarray, axes,
                     dst_span, c_dst: np.ndarray, c_src: np.ndarray,
-                    fixed_scale: bool = False) -> np.ndarray:
+                    fixed_scale: bool = False,
+                    scale_init: str = "median_axes") -> np.ndarray:
         """Scale + translation from per-axis structural extents (rotation fixed)."""
-        src_span = {k: _axis_span(src_rot, labels, ids, e) for k, e, ids in axes}
-
-        # Isotropic scale = median of the per-axis extent ratios (robust to one
-        # partial/occluded axis); fall back to 1.0 if no axis is informative.
-        ratios = [dst_span[k][1] / src_span[k][1]
-                  for k, _, _ in axes
-                  if dst_span[k] is not None and src_span[k] is not None
-                  and src_span[k][1] > _MIN_EXTENT and dst_span[k][1] > _MIN_EXTENT]
-        s = float(np.clip(np.median(ratios), *_SCALE_CLIP)) if ratios else 1.0
+        src_span = axis_spans(src_rot, labels, axes)
+        s = seed_scale(src_span, dst_span, axes, scale_init)
         if fixed_scale:
             s = 1.0    # ablation: GT scale is pre-applied upstream (rigid mode)
 

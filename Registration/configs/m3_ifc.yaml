@@ -1,0 +1,134 @@
+# Registration config — 実データ M3棟（reference = IFC）。R3 T1。
+# replica_room0.yaml と同じ骨格。違うのは reference が `ifc` であることと、
+# `classes.ifc_class_map` が増えていることだけ。
+
+source:
+  type: slam_mesh
+  # 位置合わせを回すときに差し替える（シーンごと）。T1 の時点では reference しか使わない。
+  mesh_path: output/RealData/_D/m3_block_a/run1/mesh/final_mesh_semantic_projected.ply
+  n_points: 200000
+
+reference:
+  type: ifc
+  path: BIM_IFC_Extraction/input/m3-411.ifc
+  # 室単位の切り出し。null で全体（411+410）。別名は幾何で決めた対応表を使う
+  # （ifc_export.py:name_spaces。IfcSpace の Name は "1"/"2" で室番号を持たない）
+  spaces: null                # ["411"] / ["410"] / ["411","410"] / null
+  # ★階で絞るのは必須。このモデルには IfcCovering .CEILING. が2枚あり、
+  # z=3.700 の1枚は階 `4FL+2700`（Elevation 3200）に属する別レベルの天井である。
+  # 対象階 `4FL` は壁10枚が全て z 0.500→3.100（高さ 2.600 m）、床上面 0.500 で、
+  # 室高 2.600 m。S0 の実測 2.576〜2.578 m と一致するのはこちら。
+  # 絞らないと「支える壁の無い水平面」が 0.6 m 上に増え、重力軸推定と ICP に効く。
+  storeys: ["4FL"]            # 全階: 4FL / 4FL+2700 / 5FL
+  # IfcSpace は室の**内法**なので、室を囲む壁を拾うために膨張させる
+  space_margin_m: 0.35
+  n_points: 200000
+  # IFC に什器はある（IfcFurnishingElement 169件）が、reference は構造だけにする。
+  # Replica 側 replica_room0.yaml:18 と同じ扱い。
+  keep_classes: [wall, floor, ceiling, door, window]
+  # sni-slam(py3.7) は ifcopenshell を持てないので、bim-ifc で作った .npz を読む。
+  # 無ければ io_utils が生成コマンドを添えて停止する。
+  cache_path: Registration/output/ifc/m3_ifc_all.npz
+
+classes:
+  names: [background, wall, door, floor, window, ceiling]
+  palette:
+    background: [128, 128, 128]
+    wall:       [255,  64,  64]
+    door:       [255, 200,  64]
+    floor:      [180, 220, 255]
+    window:     [ 64, 200, 255]
+    ceiling:    [200, 100, 255]
+  replica_to_six:
+    93: wall
+    37: door
+    40: floor
+    97: window
+    31: ceiling
+
+  # --- R3 T1-1: IFC クラス -> 内部6クラス（ハードコードしない） ---
+  # 完全一致を先に見る。`IfcWallStandardCase` は `IfcWall` の派生なので、
+  # 完全一致を見ないと継承側に吸われて由来が追えなくなる。
+  # 柱・梁・什器を background に落とすのは、内部クラス体系が6クラスしか持たず、
+  # reference 側は keep_classes で構造5クラス以外を面レベルで落とすため
+  # （クラス体系は拡張しない。既存結果との比較可能性を壊さないこと）。
+  ifc_class_map:
+    IfcWall: wall
+    IfcWallStandardCase: wall
+    IfcCurtainWall: wall
+    IfcDoor: door
+    IfcWindow: window
+    # PredefinedType で分岐。`.FLOOR.` 以外（`.LANDING.` 等）は background
+    IfcSlab:
+      predefined_type:
+        FLOOR: floor
+        BASESLAB: floor
+        _default: background
+    # 天井。ここが 0 になると重力軸推定が rotation.py:67 で停止する
+    IfcCovering:
+      predefined_type:
+        CEILING: ceiling
+        _default: background
+    IfcColumn: background
+    IfcBeam: background
+    IfcRailing: background
+    IfcFurnishingElement: background
+    IfcBuildingElementProxy: background
+    IfcStair: background
+    IfcStairFlight: background
+    IfcPlate: background
+    IfcMember: background
+    IfcFlowTerminal: background
+    _default: background
+
+  structural: [wall, floor, ceiling]
+  match_classes: [wall, floor, ceiling, door, window]
+
+preprocess:
+  voxel_size: 0.05
+  normal_radius: 0.15
+  normal_max_nn: 50
+
+rotation:
+  ransac_iters: 1000
+  ransac_normal_thresh_deg: 5.0
+  yaw_bins: 360
+  yaw_use_kmeans: true
+
+semantic_icp:
+  max_iter: 50
+  max_corr_dist: 0.3
+  tukey_c: 0.3
+  with_scaling: true
+  rotation_fixed: false
+  convergence_delta: 1.0e-5
+
+proposed:
+  # R3 T2。既定は現行のまま（median_axes）。Phase 1〜5 の結果を1つも変えないこと。
+  scale_init: median_axes       # median_axes(既定) | vertical_only
+
+baseline_open3d:
+  voxel_size: 0.05
+  fpfh_radius: 0.25
+  fpfh_max_nn: 100
+  ransac_dist: 0.075
+  ransac_n: 4
+  ransac_iters: 4000000
+  ransac_confidence: 0.999
+  icp_dist: 0.15
+
+eval:
+  trials: 100
+  seed: 0
+  perturb:
+    rot_deg: [0.0, 180.0]
+    trans: [-2.0, 2.0]
+    log_scale: [-0.4, 0.4]
+  success:
+    rot_deg: 5.0
+    trans: 0.1
+    scale_ratio: 0.05
+  out_dir: Registration/output/eval_m3
+  t_gt_path: Registration/output/eval_m3/T_gt.json
+
+adopted_method: proposed
