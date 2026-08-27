@@ -38,6 +38,22 @@ from src.SNI_SLAM import SNI_SLAM             # noqa: E402
 from src.Mapper import LazyKeyframe           # noqa: E402
 
 
+def rss_gb() -> float:
+    """このプロセスの常駐メモリ [GB]。段階ごとの確保量を切り分けるために使う。"""
+    try:
+        with open("/proc/self/status") as f:
+            for ln in f:
+                if ln.startswith("VmRSS:"):
+                    return int(ln.split()[1]) / 1048576.0
+    except Exception:
+        pass
+    return float("nan")
+
+
+def stage(msg: str) -> None:
+    print("[RSS %6.2f GB] %s" % (rss_gb(), msg), flush=True)
+
+
 class _Args:
     """SNI_SLAM が期待する argparse 名前空間の最小構成。"""
     def __init__(self, cfg_path: str, out: str, input_folder=None):
@@ -59,7 +75,12 @@ def main() -> int:
     ap.add_argument("--config", required=True)
     ap.add_argument("--run", required=True, help="output/.../runN（ckpts を含む）")
     ap.add_argument("--resolution", type=float, default=None,
-                    help="marching cubes の解像度 [m]。既定は bound から自動決定")
+                    help="marching cubes の解像度 [m]。既定は config の値を使う")
+    ap.add_argument("--auto-resolution", action="store_true",
+                    help="config を使わず bound の体積から解像度を決める（診断用）")
+    ap.add_argument("--trace-mesher", action="store_true",
+                    help="Mesher の各段でメモリを測る。src/utils/Mesher.py は書き換えず、"
+                         "実行時にラップするだけ（コアに副作用を残さない）")
     ap.add_argument("--target-grid-points", type=float, default=4.0e7,
                     help="自動決定時のグリッド点数の目安。configs/Replica/room0_official.yaml "
                          "が 0.02 m で約 3900 万点であり、それが実績のある規模")
@@ -79,28 +100,39 @@ def main() -> int:
 
     bound = np.array(cfg["mapping"]["marching_cubes_bound"], dtype=np.float64)
     vol = float(np.prod(bound[:, 1] - bound[:, 0]))
-    if args.resolution is None:
+    # ★既定は **config の値をそのまま使う**。
+    # 以前はここで bound 体積から再計算しており、config が全シーン一律 0.04 なのに
+    # m3_cor_d では 0.035 が選ばれてグリッド点数が 46.1 M（m3_cor_b の 38.2 M より多い）に
+    # なっていた。「bound が小さいのに失敗する」という矛盾はこれが原因。
+    # 追補3 §1 の「設定を凍結して全シーンに同じ config」にも反していた。
+    if args.resolution is not None:
+        res = args.resolution
+    elif args.auto_resolution:
         res = max(0.01, (vol / args.target_grid_points) ** (1.0 / 3.0))
         res = round(res / 0.005) * 0.005          # 5 mm 刻みに丸める
     else:
-        res = args.resolution
+        res = float(cfg["meshing"]["resolution"])
     print("bound volume %.1f m^3 / resolution %.3f m -> %.1f M grid points"
           % (vol, res, grid_points(bound, res) / 1e6))
     cfg["meshing"]["resolution"] = res
 
     # SNI_SLAM を構築すると decoders / planes / mesher が一式そろう
+    stage("start")
     sni = SNI_SLAM(cfg, _Args(args.config, args.run))
+    stage("SNI_SLAM 構築後（init_planes / get_dataset / Mesher を含む）")
 
     ck_dir = os.path.join(args.run, "ckpts")
     ck_path = args.ckpt or os.path.join(
         ck_dir, sorted(f for f in os.listdir(ck_dir) if f.endswith(".tar"))[-1])
     print("loading %s" % ck_path)
     ck = torch.load(ck_path, map_location="cpu")
+    stage("checkpoint 読み込み後")
 
     device = cfg["mapping"]["device"] if "device" in cfg["mapping"] else "cuda:0"
     decoders = sni.shared_decoders
     decoders.load_state_dict(ck["decoder_state_dict"])
     decoders = decoders.to(device)
+    stage("decoder を GPU へ転送後")
 
     def to_dev(planes: List[torch.Tensor]) -> List[torch.Tensor]:
         return [p.to(device) for p in planes]
@@ -128,6 +160,35 @@ def main() -> int:
     ]
     print("keyframes for bound: %d of %d (stride %d)"
           % (len(keyframe_dict), len(kf_list), args.kf_stride))
+    stage("plane を GPU へ転送し keyframe_dict を構築後")
+
+    if args.trace_mesher:
+        # Mesher の主要メソッドを実行時にラップして、入出力の規模と RSS を出す。
+        # どの段で 30 GB を確保しているかを、コアを触らずに特定するため。
+        import types
+
+        def wrap(obj, name):
+            orig = getattr(obj, name)
+
+            def wrapped(*a, **kw):
+                stage("  -> %s 開始" % name)
+                r = orig(*a, **kw)
+                try:
+                    if isinstance(r, dict) and "grid_points" in r:
+                        extra = " grid_points=%s" % (r["grid_points"].shape,)
+                    elif hasattr(r, "shape"):
+                        extra = " out.shape=%s" % (r.shape,)
+                    else:
+                        extra = ""
+                except Exception:
+                    extra = ""
+                stage("  <- %s 終了%s" % (name, extra))
+                return r
+            setattr(obj, name, wrapped)
+
+        for m in ("get_bound_from_frames", "get_grid_uniform", "eval_points"):
+            if hasattr(sni.mesher, m):
+                wrap(sni.mesher, m)
 
     mesh_dir = os.path.join(args.run, "mesh")
     os.makedirs(mesh_dir, exist_ok=True)
@@ -137,6 +198,7 @@ def main() -> int:
     t0 = time.time()
     sni.mesher.get_mesh(out_color, all_planes, decoders, keyframe_dict, device,
                         mesh_out_semantic=out_sem, color=True, semantic=True)
+    stage("get_mesh 完了")
     print("meshing done in %.1f min" % ((time.time() - t0) / 60))
 
     if not args.no_cull:
