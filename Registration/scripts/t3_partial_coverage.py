@@ -68,15 +68,26 @@ def make_config(base: Dict, level: float, anchor, mode: str, out_dir: str) -> Di
     return cfg
 
 
+_SRC_CACHE: Dict[str, object] = {}
+
+
 def measure_init_scale(cfg: Dict) -> Optional[Dict]:
-    """seed されるスケールを1回だけ測る（摂動に依存しないため）。"""
+    """seed されるスケールを1回だけ測る（摂動に依存しないため）。
+
+    source は被覆水準・モードに依らず同じなので**シーンごとに1回だけ読む**。
+    毎回読み直すと数百万頂点のメッシュから 20 万点を引き直すことになり、
+    160 通りの下見だけで時間を使い切る（実際に一度そうなった）。
+    """
     from regbim import io_utils, preprocess
     from regbim.config import load_t_gt
     from regbim.methods.proposed import axis_spans, canonical_axes, seed_scale
     from regbim.metrics import decompose_sim3
     import numpy as np
 
-    src = preprocess.prepare(io_utils.load_source_cloud(cfg), cfg)
+    key = cfg["source"]["mesh_path"]
+    if key not in _SRC_CACHE:
+        _SRC_CACHE[key] = preprocess.prepare(io_utils.load_source_cloud(cfg), cfg)
+    src = _SRC_CACHE[key]
     dst = preprocess.prepare(io_utils.load_reference_cloud(cfg), cfg)
     axes = canonical_axes(dst, cfg)
     dst_span = axis_spans(dst.points, dst.labels, axes)
@@ -154,12 +165,13 @@ def main() -> int:
             init[j["key"]] = measure_init_scale(cfg)
             print("  %-46s 被覆 %.3f  初期スケール誤差 %.4f"
                   % (j["key"], init[j["key"]]["coverage_achieved"],
-                     init[j["key"]]["init_scale_error_ratio"]))
+                     init[j["key"]]["init_scale_error_ratio"]), flush=True)
         except Exception as e:
             init[j["key"]] = {"error": "%s: %s" % (type(e).__name__, e)}
-            print("  %-46s ×  %s" % (j["key"], e))
-    with open(os.path.join(args.out_root, "init_scale.json"), "w") as f:
-        json.dump(init, f, indent=2, ensure_ascii=False)
+            print("  %-46s ×  %s" % (j["key"], e), flush=True)
+        # 途中で落ちても・止めても結果が残るよう毎回書く（一度これで 100 分ぶん失った）
+        with open(os.path.join(args.out_root, "init_scale.json"), "w") as f:
+            json.dump(init, f, indent=2, ensure_ascii=False)
     if args.init_scale_only:
         return 0
 
