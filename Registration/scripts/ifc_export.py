@@ -259,6 +259,67 @@ def name_spaces(recs: List[Dict[str, object]]) -> Dict[str, int]:
     return {"411": int(big["id"]), "410": int(small["id"])}
 
 
+def _horizontal_face_z(points: np.ndarray, normals: np.ndarray,
+                       mask: np.ndarray, want_up: bool,
+                       bin_m: float = 0.02) -> Optional[float]:
+    """指定クラスの、上（下）向きの水平面の最頻 z。"""
+    m = mask & (np.abs(normals[:, 2]) > 0.9)
+    m &= (normals[:, 2] > 0) if want_up else (normals[:, 2] < 0)
+    z = points[m, 2]
+    if len(z) < 50:
+        return None
+    hist, edges = np.histogram(z, bins=np.arange(z.min(), z.max() + bin_m, bin_m))
+    if len(hist) == 0:
+        return float(np.median(z))
+    k = int(np.argmax(hist))
+    return float(0.5 * (edges[k] + edges[k + 1]))
+
+
+def mark_inner(points: np.ndarray, normals: np.ndarray, recs: List[Dict],
+               z_range: Optional[Tuple[float, float]] = None,
+               eps: float = 0.05) -> np.ndarray:
+    """各点が**室内側の面**か（R5 §4 / Q6）。手法には一切使わない。
+
+    なぜ要るか
+    ----------
+    IFC の要素はソリッドなので**面が表裏2枚**ある。SLAM が観測できるのは室内側の1枚だけ
+    なので、参照側にだけ「もう1枚の面」が存在する。その距離は実測で
+    床スラブ 0.150 m / 壁 0.150〜0.200 m であり、**ICP の対応ゲート 0.3 m の内側・
+    成功閾値 0.05 m の外側**にある。つまり小さなバイアスではなく失敗を生みうる。
+
+    判定
+    ----
+    点を法線方向に ±eps ずらし、**片側だけが室の内部に入るか**を見る。
+    室の重心方向との内積では、長い壁の端で符号を誤る（重心は局所的な内外を表さない）。
+
+    - 壁：内側の面から 5 cm 内側へ動かすと室のフットプリント内、外側へ動かすと外
+    - 床の上面：法線は上向きなので +eps は室の z 範囲内、−eps はスラブの中
+    - 天井の下面：法線は下向きなので +eps が室内
+
+    どちらとも言えない点（例：室に面していない外壁の外側同士）は False にする。
+
+    ★ z の範囲は `IfcSpace` のものをそのまま使ってはいけない。
+      このモデルの `IfcSpace` は z 0.50〜4.00（＝階高）で、**天井 3.10 がその内側に丸ごと入る**。
+      すると天井の上下どちらも「室内」になり、天井の `is_inner` が全て False になる（実際そうなった）。
+      呼び出し側が **床上面〜天井下面**を渡すこと。
+    """
+    inside_p = np.zeros(len(points), dtype=bool)
+    inside_m = np.zeros(len(points), dtype=bool)
+    pp, pm = points + eps * normals, points - eps * normals
+    for r in recs:
+        if "_cells" not in r:
+            continue
+        cell = float(r["_cell_size"])
+        cells = set(map(tuple, r["_cells"].tolist()))
+        z0, z1 = z_range if z_range else r["z_range_m"]
+        for q, acc in ((pp, inside_p), (pm, inside_m)):
+            k = np.floor(q[:, :2] / cell).astype(np.int64)
+            inxy = np.fromiter((tuple(x) in cells for x in k.tolist()),
+                               dtype=bool, count=len(k))
+            acc |= inxy & (q[:, 2] >= z0) & (q[:, 2] <= z1)
+    return inside_p & ~inside_m
+
+
 def clip_to_spaces(points: np.ndarray, recs: List[Dict], ids: List[int],
                    margin_m: float) -> np.ndarray:
     """指定した室の占有セルを `margin_m` だけ膨張させ、その中の点を残す。
@@ -371,8 +432,23 @@ def build_ifc_cloud(ifc_path: str, class_map: Dict, n_points: int,
         raise ValueError("室で切り出した後の点が %d に満たない（最大 %d 倍まで試行）"
                          % (n_points, over))
 
+    # R5 §4 / Q6: 表裏の属性化。**手法は変えない。** 失敗分析で
+    # 「裏面に吸われた対応の割合」を出せるようにするためだけに持つ。
+    # 実効的な室の高さ＝床の上面から天井の下面まで。`IfcSpace` の z（階高）ではない
+    z_fl = _horizontal_face_z(pts, nrm, lab == NAME_TO_ID["floor"], want_up=True)
+    z_ce = _horizontal_face_z(pts, nrm, lab == NAME_TO_ID["ceiling"], want_up=False)
+    zr = (z_fl, z_ce) if (z_fl is not None and z_ce is not None and z_ce > z_fl) else None
+    is_inner = mark_inner(pts, nrm, recs, z_range=zr)
     lo, hi = pts.min(axis=0), pts.max(axis=0)
     meta = {
+        "room_z_range_m": (None if zr is None
+                           else [round(zr[0], 4), round(zr[1], 4)]),
+        "is_inner_frac": round(float(is_inner.mean()), 4),
+        "is_inner_frac_by_class": {
+            CLASS_NAMES[c]: round(float(is_inner[lab == c].mean()), 4)
+            for c in sorted(np.unique(lab))},
+        "is_inner_note": ("室内側の面か。法線方向に ±5 cm ずらして片側だけが室の内部に"
+                          "入るかで判定。手法には使わない（R5 §4 / Q6）"),
         "source": "ifc", "path": os.path.abspath(ifc_path), "schema": f.schema,
         "length_unit": unit,
         # ★ geom が m を返すので係数は掛けていない。掛けると 1/1000 になる
@@ -390,7 +466,8 @@ def build_ifc_cloud(ifc_path: str, class_map: Dict, n_points: int,
                          for c in sorted(np.unique(lab))},
     }
     meta.update(info)
-    return {"points": pts, "labels": lab, "normals": nrm, "meta": meta}
+    return {"points": pts, "labels": lab, "normals": nrm,
+            "is_inner": is_inner, "meta": meta}
 
 
 def write_ply(path: str, pts: np.ndarray, lab: np.ndarray) -> None:
@@ -464,8 +541,11 @@ def main() -> int:
     print("別名の割当（床面積の大小で決定）: %s" % meta["space_alias"])
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    print("室内側の面の割合: 全体 %.3f / クラス別 %s"
+          % (meta["is_inner_frac"], meta["is_inner_frac_by_class"]))
     np.savez_compressed(args.out, points=res["points"], labels=res["labels"],
-                        normals=res["normals"], meta=json.dumps(meta, ensure_ascii=False))
+                        normals=res["normals"], is_inner=res["is_inner"],
+                        meta=json.dumps(meta, ensure_ascii=False))
     with open(os.path.splitext(args.out)[0] + "_meta.json", "w") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
     print("\nwrote %s" % args.out)

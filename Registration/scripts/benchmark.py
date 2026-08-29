@@ -52,6 +52,7 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
     # only used for the direct error metric above.)
     ref_T = T0
     trial_records: List[Dict] = []
+    yaw_records: List[Dict] = []
     rot_errs, trans_errs, scale_errs, times, successes = [], [], [], [], []
     successes_strict = []
     for i in range(trials):
@@ -75,6 +76,32 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
         if ok_strict is not None:
             successes_strict.append(bool(ok_strict))
         Rp, tp, sp = metrics.decompose_sim3(P)
+        # R5 §2-5: which Manhattan yaw candidate was picked, and was it the right
+        # one? The correct candidate can only be decided here, because only the
+        # evaluator knows the expected rotation. Opt-in via config, so every
+        # existing config keeps producing byte-identical output.
+        yaw_diag = None
+        if (cfg.get("diagnostics") or {}).get("record_yaw"):
+            d = getattr(method, "last_yaw_diag", None)
+            if d:
+                R_exp = metrics.decompose_sim3(expected)[0]
+                errs = [metrics.rotation_error_deg(np.asarray(R), R_exp)
+                        for R in d["candidate_R"]]
+                w = d["winner"]
+                yaw_diag = {
+                    "candidate_scores": d["candidate_scores"],
+                    "winner": w,
+                    "margin": d["margin"],
+                    "correct": int(np.argmin(errs)),
+                    "winner_rot_err_deg": round(errs[w], 3),
+                    "best_possible_rot_err_deg": round(float(min(errs)), 3),
+                    "picked_correct": bool(int(np.argmin(errs)) == w),
+                }
+        if yaw_diag is not None:
+            # ★ trials.csv には入れない。列が1つ増えるだけで既存の出力と
+            #    バイト単位で一致しなくなり、T2 の回帰確認が通らなくなる。
+            yaw_records.append(dict(yaw_diag, method=method_name, trial=i,
+                                    success=bool(ok)))
         trial_records.append({
             "method": method_name,
             "trial": i,
@@ -127,7 +154,7 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
         for stat_name in ("min", "q25", "q75", "max", "mean", "std"):
             row[f"{key}_{stat_name}"] = round(pct[stat_name], 5)
     row["gt_scale_prescaled"] = gt_scale
-    return row, trial_records
+    return row, trial_records, yaw_records
 
 
 def _write_csv(rows: List[Dict], path: str) -> None:
@@ -248,15 +275,22 @@ def main() -> None:
     print(f"benchmarking methods: {methods}  (trials={trials}, seed={seed})")
     rows = []
     all_trials: List[Dict] = []
+    all_yaw: List[Dict] = []
     for name in methods:
         print(f"  -> {name}")
-        row, trial_records = _evaluate(name, src, dst, T_gt, cfg, trials, seed)
+        row, trial_records, yaw_records = _evaluate(
+            name, src, dst, T_gt, cfg, trials, seed)
         rows.append(row)
         all_trials.extend(trial_records)
+        all_yaw.extend(yaw_records)
 
     out_dir = args.out_dir or cfg["eval"]["out_dir"]
     _write_csv(rows, os.path.join(out_dir, "results.csv"))
     _write_csv(all_trials, os.path.join(out_dir, "trials.csv"))
+    if all_yaw:
+        # 別ファイルに出す。既存 config では空なので**ファイル自体が生まれない**
+        with open(os.path.join(out_dir, "yaw_diag.json"), "w") as f:
+            json.dump(all_yaw, f, indent=1)
     _write_summary(rows, all_trials, cfg, args.config, trials, out_dir,
                    extra_meta={"label_noise": args.label_noise,
                                "voxel_size_override": args.voxel_size})

@@ -38,6 +38,7 @@ import tempfile
 import time
 from typing import Dict, List, Optional
 
+import numpy as np
 import yaml
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -64,6 +65,9 @@ def make_config(base: Dict, level: float, anchor, mode: str, out_dir: str) -> Di
     if level < 1.0:
         cfg["reference"]["clip"] = {"keep_frac": level, "anchor": list(anchor)}
     cfg.setdefault("proposed", {})["scale_init"] = mode
+    # R5 §2-5 / Q3: どのヨー候補が選ばれたかを記録する。既定 config には無い項目なので
+    # Phase 1〜5 の出力は一切変わらない（yaw_diag.json はここでだけ生まれる）。
+    cfg.setdefault("diagnostics", {})["record_yaw"] = True
     cfg["eval"]["out_dir"] = out_dir
     return cfg
 
@@ -113,7 +117,41 @@ def measure_init_scale(cfg: Dict) -> Optional[Dict]:
                for k, _, _ in axes}
     extents.update({("src_" + k): (None if src_span0[k] is None else round(src_span0[k][1], 3))
                     for k, _, _ in axes})
-    return {"seed_scale_candidates": [round(float(v), 5) for v in vals],
+    # --- R5 §2-5: 残った参照の「壁方向の多様性」を記録する ---------------------
+    # main の仮説は「成功率を決めているのは残った量ではなく、残った壁が何方向あるか」。
+    # これが無いと 32 時間かけても『曲線が引けた』で終わる。
+    #
+    # ★ 指示は「mod π/2 に畳む」だが、**mod π（180°）で畳む**。
+    #   mod 90° に畳むと直交する2方向が同じビンに落ち、
+    #   仮説が区別したい「直交2方向」と「1方向」が**どちらも1ピークになってしまう**。
+    #   既存の precheck_scene.plane_diversity も 180° 周期（36ビン × 5°）であり、そちらに合わせる。
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(REPO, "tools", "realdata"))
+    from precheck_scene import plane_diversity                     # noqa: E402
+    from regbim import rotation as _rot                            # noqa: E402
+    up = _rot.canonical_rotation(dst, cfg)[2]
+    pd = plane_diversity(dst, up)
+    n_wall = int(dst.class_mask("wall").sum())
+    dirs = pd.get("directions_deg") or []
+    # 2方向が直交しているか（90° からのずれ）。マンハッタン仮定が成り立つかの直接の指標
+    ortho_dev = None
+    if len(dirs) >= 2:
+        d = abs(dirs[0] - dirs[1]) % 180.0
+        ortho_dev = round(min(abs(d - 90.0), abs(180.0 - d - 90.0)), 2)
+
+    return {"wall_directions": {
+                "n_directions": pd.get("n_directions"),
+                "directions_deg": dirs,
+                "direction_fracs": pd.get("direction_fracs"),
+                "orthogonality_dev_deg": ortho_dev,
+                "concentration_vs_uniform": pd.get("concentration_vs_uniform"),
+                "n_wall_points": n_wall,
+                "n_wall_points_vertical": pd.get("n_wall_points_vertical"),
+                "fold_period_deg": 180.0,
+            },
+            "n_floor_points": int(dst.class_mask("floor").sum()),
+            "n_ceiling_points": int(dst.class_mask("ceiling").sum()),
+            "seed_scale_candidates": [round(float(v), 5) for v in vals],
             "seed_scale_median": round(float(np.median(vals)), 5),
             "true_scale": round(s_true, 5),
             "init_scale_error_ratio": round(float(np.median(vals)) / s_true, 5),
@@ -230,11 +268,41 @@ def main() -> int:
         s = json.load(open(sp))
         m = s["methods"]["proposed"]
         agg = m["aggregate"]
+        iv = init.get(j["key"], {})
+        # ヨー診断（R5 §2-5）。取り違えを直接観測した集計を1行に畳む
+        yd = os.path.join(out, "yaw_diag.json")
+        yaw = None
+        if os.path.exists(yd):
+            recs = json.load(open(yd))
+            if recs:
+                n = len(recs)
+                wrong = [r for r in recs if not r["picked_correct"]]
+                margins_w = [r["margin"] for r in wrong if r.get("margin") is not None]
+                margins_ok = [r["margin"] for r in recs
+                              if r["picked_correct"] and r.get("margin") is not None]
+                yaw = {
+                    "n": n,
+                    "frac_picked_correct": round(sum(r["picked_correct"] for r in recs) / n, 4),
+                    # 「差が小さいときに間違えているか」— main が §2-5 で見たいと書いた量
+                    "median_margin_when_wrong": (round(float(np.median(margins_w)), 5)
+                                                 if margins_w else None),
+                    "median_margin_when_right": (round(float(np.median(margins_ok)), 5)
+                                                 if margins_ok else None),
+                    "frac_success_given_correct_yaw": round(
+                        np.mean([r["success"] for r in recs if r["picked_correct"]]), 4)
+                    if any(r["picked_correct"] for r in recs) else None,
+                    "frac_success_given_wrong_yaw": round(
+                        np.mean([r["success"] for r in wrong]), 4) if wrong else None,
+                }
         rows.append({
             "scene": j["scene"], "level_nominal": j["level"],
             "anchor": list(j["anchor"]), "mode": j["mode"],
-            "coverage_achieved": init.get(j["key"], {}).get("coverage_achieved"),
-            "init_scale_error_ratio": init.get(j["key"], {}).get("init_scale_error_ratio"),
+            "coverage_achieved": iv.get("coverage_achieved"),
+            "init_scale_error_ratio": iv.get("init_scale_error_ratio"),
+            "wall_directions": iv.get("wall_directions"),
+            "n_floor_points": iv.get("n_floor_points"),
+            "n_ceiling_points": iv.get("n_ceiling_points"),
+            "yaw": yaw,
             "trials": agg["robust_trials"],
             "success_rate": agg["success_rate"],
             "ci_lo": agg.get("success_ci_lo"), "ci_hi": agg.get("success_ci_hi"),

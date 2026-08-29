@@ -135,6 +135,10 @@ def _chamfer(T: np.ndarray, src: LabeledCloud, dst: LabeledCloud) -> float:
 class Proposed(BaseRegistration):
     name = "proposed"
 
+    # Filled by ``register`` only when ``diagnostics.record_yaw`` is on; read by
+    # the caller right after the call. Not used by the method itself.
+    last_yaw_diag: Optional[Dict] = None
+
     def register(self, src: LabeledCloud, dst: LabeledCloud, cfg: Dict,
                  tracer: Optional[Tracer] = None) -> np.ndarray:
         src_p = preprocess.prepare(src, cfg)
@@ -176,6 +180,13 @@ class Proposed(BaseRegistration):
         # --- stage 1: plane-seeded search -> reliable yaw R and scale s ----------
         candidates: List[np.ndarray] = rotation.relative_rotation_candidates(
             src_p, dst_p, cfg)
+        # R5 §2-5 / Q3: record which Manhattan candidate won and by how much.
+        # T3 showed the failure mode is picking the *wrong* candidate (66% of
+        # failures involve rotation, worst excess 175 deg), so the scores that
+        # decide it have to be observable. Opt-in via config so every existing
+        # config produces byte-identical output; the method itself is unchanged.
+        record_yaw = bool((cfg.get("diagnostics") or {}).get("record_yaw", False))
+        cand_scores: List[float] = []
         plane_T = None
         plane_trace: Optional[Tracer] = None
         best_score = -np.inf
@@ -193,10 +204,26 @@ class Proposed(BaseRegistration):
             T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True,
                              tracer=cand_tracer)
             score = class_inlier_ratio(src_score, dst_score, T, thresh)
+            if record_yaw:
+                cand_scores.append(float(score))
             if score > best_score:
                 best_score = score
                 plane_T = T
                 plane_trace = cand_tracer
+
+        if record_yaw:
+            order = np.argsort(cand_scores)[::-1]
+            self.last_yaw_diag = {
+                # 候補ごとの rho_k。**差が小さいときに間違えているか**を見るための量
+                "candidate_scores": [round(s, 5) for s in cand_scores],
+                "winner": int(np.argmax(cand_scores)),
+                # 1位と2位の差。小さいほど「たまたま選んだ」に近い
+                "margin": (round(cand_scores[order[0]] - cand_scores[order[1]], 5)
+                           if len(cand_scores) > 1 else None),
+                # 正解の候補を決めるのは呼び出し側（期待する回転を知っているのは評価側）。
+                # ここでは候補の回転そのものを渡す
+                "candidate_R": [R.tolist() for R in candidates],
+            }
 
         # --- stage 2: centroid-refine translation at the locked (R, s) -----------
         R_win, _, s_win = decompose_sim3(plane_T)

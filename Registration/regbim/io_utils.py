@@ -140,6 +140,10 @@ def _load_ifc_reference(spec: Dict, classes_cfg: Dict) -> LabeledCloud:
         meta = json.loads(str(z["meta"]))
         meta["cache_path"] = cache
         _check_ifc_cache_matches(spec, meta, cache)
+        if "is_inner" in z.files:
+            # R5 Q6: room-facing side of each solid face. Carried for failure
+            # analysis only -- no stage of the method reads it.
+            meta["is_inner"] = z["is_inner"]
         return LabeledCloud(points=z["points"], labels=z["labels"],
                             normals=z["normals"], meta=meta)
 
@@ -167,8 +171,10 @@ def _load_ifc_reference(spec: Dict, classes_cfg: Dict) -> LabeledCloud:
         spaces=spec.get("spaces"), storeys=spec.get("storeys"),
         space_margin_m=float(spec.get("space_margin_m", 0.35)),
         seed=int(spec.get("seed", 0)), keep_classes=spec.get("keep_classes"))
+    meta = dict(res["meta"])
+    meta["is_inner"] = res["is_inner"]
     return LabeledCloud(points=res["points"], labels=res["labels"],
-                        normals=res["normals"], meta=res["meta"])
+                        normals=res["normals"], meta=meta)
 
 
 def _check_ifc_cache_matches(spec: Dict, meta: Dict, cache: str) -> None:
