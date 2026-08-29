@@ -151,7 +151,82 @@ for m in MODES:
         line.append("%.2f (%d/%d)" % (rot / nf, rot, nf) if nf else "—")
     print("    %-14s %-16s %-16s %-16s %-16s" % (m, *line))
 
-# --- 図：成功率 vs 被覆率 ---
+# --- R5 §2-5: 主軸は「壁方向数」。被覆率は併記に留める --------------------
+have_walls = [r for r in ok if (r.get("wall_directions") or {}).get("n_directions") is not None]
+if have_walls:
+    print("\n" + "=" * 100)
+    print("【R5 §2 主軸】成功率 vs 残った壁方向数")
+    print("  仮説: 成功率を決めているのは『どれだけ残ったか』ではなく")
+    print("        『残った参照に壁が何方向あるか』（ヨー4候補を見分けられるか）")
+    print("\n%-14s %-10s %8s %8s %18s %10s"
+          % ("mode", "壁方向数", "セル数", "試行数", "成功率[95%CI]", "ヨー正解率"))
+    print("-" * 78)
+    for m in MODES:
+        for nd in sorted({(r["wall_directions"]["n_directions"]) for r in have_walls}):
+            rs = [r for r in have_walls
+                  if r["mode"] == m and r["wall_directions"]["n_directions"] == nd]
+            if not rs:
+                continue
+            k = sum(round(r["success_rate"] * r["trials"]) for r in rs)
+            n = sum(r["trials"] for r in rs)
+            p = k / n
+            z = 1.96
+            den = 1 + z * z / n
+            c = (p + z * z / (2 * n)) / den
+            h = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
+            yc = [r["yaw"]["frac_picked_correct"] for r in rs if r.get("yaw")]
+            print("%-14s %-10d %8d %8d  %.3f [%.3f,%.3f] %10s"
+                  % (m, nd, len(rs), n, p, c - h, c + h,
+                     "%.3f" % np.mean(yc) if yc else "—"))
+
+    # ヨーを正しく選べたときと選び損ねたときの成功率（機構の直接の証拠）
+    yc_ok, yc_ng, mg_ok, mg_ng = [], [], [], []
+    for r in have_walls:
+        y = r.get("yaw")
+        if not y:
+            continue
+        if y.get("frac_success_given_correct_yaw") is not None:
+            yc_ok.append(y["frac_success_given_correct_yaw"])
+        if y.get("frac_success_given_wrong_yaw") is not None:
+            yc_ng.append(y["frac_success_given_wrong_yaw"])
+        if y.get("median_margin_when_right") is not None:
+            mg_ok.append(y["median_margin_when_right"])
+        if y.get("median_margin_when_wrong") is not None:
+            mg_ng.append(y["median_margin_when_wrong"])
+    print("\n【機構の直接の証拠】")
+    if yc_ok:
+        print("  ヨーを正しく選べたときの成功率  中央値 %.3f (n=%d セル)"
+              % (np.median(yc_ok), len(yc_ok)))
+    if yc_ng:
+        print("  ヨーを選び損ねたときの成功率    中央値 %.3f (n=%d セル)"
+              % (np.median(yc_ng), len(yc_ng)))
+    print("  → 後者が前者より大きく低いなら、ヨーの選択が成功率を決めていることになる")
+    if mg_ok and mg_ng:
+        print("\n  候補スコアの1位-2位差（margin）")
+        print("    正解したとき   中央値 %.5f (n=%d)" % (np.median(mg_ok), len(mg_ok)))
+        print("    取り違えたとき 中央値 %.5f (n=%d)" % (np.median(mg_ng), len(mg_ng)))
+        print("  → 取り違え時の方が小さいなら『僅差で誤って選んでいる』")
+
+    # 図：主軸 = 壁方向数
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for m, c in zip(MODES, ["#4C78A8", "#E45756"]):
+        rs = [r for r in have_walls if r["mode"] == m]
+        x = [r["wall_directions"]["n_directions"]
+             + (0.06 if m == MODES[1] else -0.06) for r in rs]
+        ax.scatter(x, [r["success_rate"] for r in rs], s=18, alpha=0.45,
+                   color=c, label=m, linewidths=0)
+    ax.set_xlabel("number of wall directions surviving in the reference")
+    ax.set_ylabel("recovery success rate")
+    ax.set_title("Success rate vs wall-direction diversity (R5 §2)")
+    ax.grid(alpha=0.3); ax.legend()
+    p2 = os.path.join(root, "success_vs_wall_directions.png")
+    fig.tight_layout(); fig.savefig(p2, dpi=150); plt.close(fig)
+    print("\nwrote %s" % p2)
+
+# --- 図：成功率 vs 被覆率（併記） ---
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
