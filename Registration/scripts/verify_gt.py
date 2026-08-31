@@ -73,20 +73,52 @@ def decompose(T: np.ndarray):
     return R, T[:3, 3].copy(), s
 
 
-def gravity_axis(points: np.ndarray, normals: Optional[np.ndarray]) -> Optional[np.ndarray]:
-    """点群の鉛直軸。法線があれば水平面（床・天井）の法線の主方向から取る。"""
+def gravity_axis(points: np.ndarray, normals: Optional[np.ndarray],
+                 labels: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+    """点群の鉛直軸を、**床・天井の法線**の主方向から取る。
+
+    ★ ラベルがあるなら必ず使うこと。全頂点の法線で主方向を取ると、
+      廊下のように壁面積が支配的なシーンでは**壁の法線が勝ってしまい**、
+      鉛直ではなく水平方向が「重力軸」として出る。
+      それを BIM の +Z と比べれば当然大きくずれ、**位置合わせのせいに見えてしまう。**
+    """
     if normals is None or len(normals) < 100:
         return None
+    if labels is not None:
+        m = np.isin(labels, [CLASS_NAMES.index("floor"), CLASS_NAMES.index("ceiling")])
+        if m.sum() >= 100:
+            normals = normals[m]
     n = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12)
-    # 法線の外積行列の最小固有ベクトル…ではなく、|n・u| が大きい方向を探す。
-    # 床・天井は同じ軸に対して符号が逆なので、n n^T の最大固有ベクトルでよい
+    # 床と天井は同じ軸に対して符号が逆なので、n n^T の最大固有ベクトルでよい
     M = n.T @ n
     w, V = np.linalg.eigh(M)
     return V[:, int(np.argmax(w))]
 
 
+def floor_level(points: np.ndarray, normals: Optional[np.ndarray],
+                labels: Optional[np.ndarray], bin_m: float = 0.02):
+    """床面の高さ。**床ラベルかつ上向き法線**の最頻 z を返す。
+
+    ★ 「下位 5% の中央値」で代用してはいけない。TSDF メッシュには床より下の
+      ノイズ面が出るので、そこを拾って**位置合わせが 0.2〜0.3 m ずれている**ように見える。
+      実際にその誤検出を出した（`m3_cor_c` で 0.28 m）。
+    """
+    if labels is None or normals is None:
+        return None, "ラベルまたは法線が無い"
+    m = (labels == CLASS_NAMES.index("floor")) & (normals[:, 2] > 0.9)
+    z = points[m, 2]
+    if len(z) < 100:
+        return None, "上向きの床点が %d 点しかない" % len(z)
+    hist, edges = np.histogram(z, bins=np.arange(z.min(), z.max() + bin_m, bin_m))
+    if len(hist) == 0:
+        return float(np.median(z)), "床点 %d" % len(z)
+    k = int(np.argmax(hist))
+    return float(0.5 * (edges[k] + edges[k + 1])), "床点 %d の最頻値" % int(m.sum())
+
+
 def check(scene: str, T: np.ndarray, ref: Dict, traj: Optional[np.ndarray],
-          src_pts: Optional[np.ndarray], src_nrm: Optional[np.ndarray]) -> Dict:
+          src_pts: Optional[np.ndarray], src_nrm: Optional[np.ndarray],
+          src_lab: Optional[np.ndarray] = None) -> Dict:
     R, t, s = decompose(T)
     out: Dict[str, object] = {"scene": scene}
     flags: List[str] = []
@@ -103,7 +135,7 @@ def check(scene: str, T: np.ndarray, ref: Dict, traj: Optional[np.ndarray],
                             "として報告する量でもある")
 
     # --- 2. 重力軸 ----------------------------------------------------------
-    g_src = gravity_axis(src_pts, src_nrm) if src_pts is not None else None
+    g_src = gravity_axis(src_pts, src_nrm, src_lab) if src_pts is not None else None
     if g_src is not None:
         g_in_bim = R @ g_src
         ang = np.degrees(np.arccos(np.clip(abs(g_in_bim @ np.array([0, 0, 1.0])), 0, 1)))
@@ -118,15 +150,18 @@ def check(scene: str, T: np.ndarray, ref: Dict, traj: Optional[np.ndarray],
     z_bim_floor = ref["floor_top_z"]
     if src_pts is not None:
         p = (src_pts @ R.T) * s + t
-        # source 側の床は「下から数えて厚みのある水平帯」。ここでは下位 5% の中央値で代用する
-        z_low = float(np.median(np.sort(p[:, 2])[:max(len(p) // 20, 1)]))
-        d = abs(z_low - z_bim_floor)
-        out["floor"] = {"src_low_z_m": round(z_low, 4),
-                        "bim_floor_top_z_m": round(z_bim_floor, 4),
-                        "diff_m": round(d, 4),
-                        "verdict": "ok" if d <= FLOOR_WARN_M else "warn"}
-        if d > FLOOR_WARN_M:
-            flags.append("変換後の床が BIM の床から %.2f m ずれている" % d)
+        n_t = (src_nrm @ R.T) if src_nrm is not None else None
+        z_src, how = floor_level(p, n_t, src_lab)
+        if z_src is None:
+            out["floor"] = {"verdict": "skipped", "why": how}
+        else:
+            d = abs(z_src - z_bim_floor)
+            out["floor"] = {"src_floor_z_m": round(z_src, 4),
+                            "bim_floor_top_z_m": round(z_bim_floor, 4),
+                            "diff_m": round(d, 4), "how": how,
+                            "verdict": "ok" if d <= FLOOR_WARN_M else "warn"}
+            if d > FLOOR_WARN_M:
+                flags.append("変換後の床が BIM の床から %.2f m ずれている" % d)
 
     # --- 4/5. 軌跡 ----------------------------------------------------------
     if traj is not None and len(traj):
@@ -212,19 +247,29 @@ def main() -> int:
             continue
         T = load_T(p)
         sp = os.path.join(args.kit, "source", "%s.ply" % scene)
-        src_pts = src_nrm = None
+        src_pts = src_nrm = src_lab = None
         if os.path.exists(sp):
             m = o3d.io.read_triangle_mesh(sp)
             m.compute_vertex_normals()
             src_pts = np.asarray(m.vertices)
             src_nrm = np.asarray(m.vertex_normals)
+            # ★ キットに入れた source は生の TSDF メッシュで、**頂点色は写真の RGB**。
+            #   ラベルはパレット色を持つ**投影後**のメッシュから取る（頂点は同一）。
+            pj = ("output/RealData/_TSDF/%s/run1/mesh/"
+                  "final_mesh_semantic_projected.ply" % scene)
+            if os.path.exists(pj):
+                mp = o3d.io.read_triangle_mesh(pj)
+                cp = np.asarray(mp.vertex_colors)
+                if len(cp) == len(src_pts):
+                    src_lab = np.argmin(
+                        ((cp[:, None, :] - palette[None, :, :]) ** 2).sum(2), axis=1)
         tp = "data/realdata/%s/traj.txt" % scene
         traj = None
         if os.path.exists(tp):
             rows = [ln.split() for ln in open(tp) if ln.strip()]
             traj = np.asarray([[float(v) for v in r]
                                for r in rows]).reshape(-1, 4, 4)[:, :3, 3]
-        r = check(scene, T, ref, traj, src_pts, src_nrm)
+        r = check(scene, T, ref, traj, src_pts, src_nrm, src_lab)
         results.append(r)
         print("=== %s : %s ===" % (scene, r["overall"]))
         print("  スケール %.5f（1.0 から %.2f%%）  %s"
