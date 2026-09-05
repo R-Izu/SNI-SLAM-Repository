@@ -278,8 +278,21 @@ def _write_summary(rows: List[Dict], all_trials: List[Dict], cfg: Dict,
             entry["selfconsistency_failure_breakdown_strict"] = \
                 stats.failure_breakdown(sc, succ_strict)
         per_method[name] = entry
+    # R7 §7: アブレーションが実際に外しているものを、出力に書いておく。
+    # 呼称が実態より広いと、論文で過大に呼んでしまう。
+    ABL_MEANING = {
+        "single_class": ("class-constrained correspondence removed "
+                         "(labels still drive gravity/Manhattan, per-class extents, "
+                         "and structural-point selection). NOT 'no semantics'."),
+        "fixed_scale": "scale fixed to 1.0 (GT scale pre-applied upstream)",
+        "no_gravity": ("entire physical-constraint stage removed "
+                       "(gravity + Manhattan candidates + plane seeding together). "
+                       "NOT 'gravity alone'."),
+    }
+    abl = cfg.get("ablation") or {}
     summary = {
         "config": os.path.abspath(config_path),
+        "ablation": {k: ABL_MEANING.get(k, "?") for k, v in abl.items() if v} or None,
         "seed": int(cfg["eval"]["seed"]),
         "trials": trials,
         "perturb": cfg["eval"]["perturb"],

@@ -149,18 +149,24 @@ class Proposed(BaseRegistration):
         struct_ids = [NAME_TO_ID[n] for n in cfg["classes"]["structural"]]
 
         if abl.get("no_gravity"):
-            # Ablation: drop the whole physical-constraint stage (gravity
-            # canonicalisation, Manhattan yaw candidates, plane-extent seeding —
-            # all derive from the canonical frame). Init = structural-centroid
-            # alignment at unit scale; rotation left to free Sim3 semantic ICP.
+            # Ablation `no_gravity` = **removal of the entire physical-constraint
+            # stage**, not "the contribution of gravity alone": gravity
+            # canonicalisation, Manhattan yaw candidates and plane-extent seeding
+            # all go together, because they all derive from the canonical frame.
+            # Do not report it as isolating gravity (R7 §7).
+            # Init = structural-centroid alignment at unit scale; rotation left to
+            # free Sim3 semantic ICP.
             c_src = _struct_centroid(src_p.points, src_p.labels, struct_ids)
             c_dst = _struct_centroid(dst_p.points, dst_p.labels, struct_ids)
             init_T = make_sim3(np.eye(3), c_dst - c_src, 1.0)
             return semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=False,
                                 tracer=tracer)
 
-        # Scoring clouds: label-collapsed for the no-semantic ablation so the
-        # yaw disambiguation gets no help from labels either.
+        # Ablation `single_class` = **removal of class-constrained correspondence**
+        # (ICP matching and the candidate score stop distinguishing classes).
+        # It is NOT "no semantic information": labels still drive the gravity /
+        # Manhattan estimation, the per-class extents and the structural-point
+        # selection below. Do not report it as a semantics ablation (R7 §7).
         if abl.get("single_class"):
             match_ids = [NAME_TO_ID[n] for n in cfg["classes"]["match_classes"]]
             one = match_ids[0]

@@ -20,28 +20,50 @@ LEVELS = [1.0, 0.75, 0.50, 0.30]
 MODES = ["median_axes", "vertical_only"]
 
 
-def pick(scene, level, mode):
-    for r in ok:
-        if r["scene"] == scene and abs(r["level_nominal"] - level) < 1e-9 \
-                and r["mode"] == mode:
-            return r
-    return None
+def cells(scene, level, mode):
+    """該当する**全 anchor** のセルを返す。
+
+    ★ 以前の `pick()` は最初の1行だけ返しており、**anchor を集約していなかった**
+      （R7 §4-1）。4隅で均したつもりの表が、実際には南西隅だけの値になっていた。
+      傍証：報告した `0.870 [0.845, 0.892]` は k=696, n=800 の Wilson 区間と
+      丸めまで一致する（n=3200 なら [0.858, 0.881]）。
+    """
+    return [r for r in ok
+            if r["scene"] == scene and abs(r["level_nominal"] - level) < 1e-9
+            and r["mode"] == mode]
+
+
+def pool(rs):
+    """セル群を**生の成功数と試行数**で合算する（率の平均ではない）。"""
+    k = sum(round(r["success_rate"] * r["trials"]) for r in rs)
+    n = sum(r["trials"] for r in rs)
+    return k, n
 
 
 scenes = sorted({r["scene"] for r in ok})
-print("成功率（Wilson 95%%CI）。N=%d 試行/セル、seed 固定" % ok[0]["trials"])
-print("%-10s %-14s %-18s %-18s %-18s %-18s"
+anchors = sorted({tuple(r["anchor"]) for r in ok})
+print("★ この成功率は **自己一貫性**（手法自身の無摂動解へ戻れた率）であって、")
+print("  **正解に合った率ではない**（R7 §0）。合成の T_gt は提案手法自身の出力なので、")
+print("  この集計から精度を読んではならない。")
+print()
+print("集計の母数（R7 §4-2）: anchor %d 通り %s" % (len(anchors), anchors))
+print("%-10s %-14s %-20s %-20s %-20s %-20s"
       % ("scene", "mode", "被覆100%", "75%", "50%", "30%"))
-print("-" * 100)
+print("-" * 110)
 for s in scenes:
     for m in MODES:
-        cells = []
+        cols = []
         for lv in LEVELS:
-            r = pick(s, lv, m)
-            cells.append("—" if r is None else
-                         "%.2f [%.2f,%.2f]" % (r["success_rate"], r["ci_lo"], r["ci_hi"]))
-        print("%-10s %-14s %-18s %-18s %-18s %-18s" % (s, m, *cells))
+            rs = cells(s, lv, m)
+            if not rs:
+                cols.append("—")
+                continue
+            k, n = pool(rs)
+            cols.append("%.2f (%d/%d, a=%d)" % (k / n, k, n, len(rs)))
+        print("%-10s %-14s %-20s %-20s %-20s %-20s" % (s, m, *cols))
     print()
+print("※ a= は集計に使った anchor 数。**100% 被覆は anchor を1つにまとめている**")
+print("  （t3_partial_coverage.py:188-194）ので、a=1 になるのが正しい。")
 
 print("=" * 100)
 print("\n【集計】被覆率ごとの成功率")
@@ -50,10 +72,8 @@ agg = {}
 for m in MODES:
     line = []
     for lv in LEVELS:
-        rs = [pick(s, lv, m) for s in scenes]
-        rs = [r for r in rs if r]
-        k = sum(round(r["success_rate"] * r["trials"]) for r in rs)
-        n = sum(r["trials"] for r in rs)
+        rs = [r for s in scenes for r in cells(s, lv, m)]
+        k, n = pool(rs)
         p = k / n if n else float("nan")
         z = 1.96
         den = 1 + z * z / n
@@ -142,12 +162,12 @@ for m in MODES:
     for lv in LEVELS:
         nf = rot = 0
         for s in scenes:
-            r = pick(s, lv, m)
-            fb = (r or {}).get("failure_breakdown") or {}
-            nf += fb.get("n_failed", 0)
-            for k, v in (fb.get("combinations") or {}).items():
-                if "rot_deg" in k:
-                    rot += v
+            for r in cells(s, lv, m):
+                fb = r.get("failure_breakdown") or {}
+                nf += fb.get("n_failed", 0)
+                for k, v in (fb.get("combinations") or {}).items():
+                    if "rot_deg" in k:
+                        rot += v
         line.append("%.2f (%d/%d)" % (rot / nf, rot, nf) if nf else "—")
     print("    %-14s %-16s %-16s %-16s %-16s" % (m, *line))
 
@@ -193,14 +213,37 @@ if have_walls:
             mg_ok.append(y["median_margin_when_right"])
         if y.get("median_margin_when_wrong") is not None:
             mg_ng.append(y["median_margin_when_wrong"])
-    print("\n【機構の直接の証拠】")
+    # R7 §4-4: セル別条件付き率の**中央値**と、全試行を**プールした率**を分けて出す。
+    # 前者を P(success | correct yaw) と書いてはいけない（セルの重みが消えている）。
+    n_ok = n_ok_s = n_ng = n_ng_s = 0
+    for r in have_walls:
+        y = r.get("yaw")
+        if not y or not y.get("n"):
+            continue
+        c = round(y["frac_picked_correct"] * y["n"])
+        w = y["n"] - c
+        if y.get("frac_success_given_correct_yaw") is not None:
+            n_ok += c
+            n_ok_s += round(y["frac_success_given_correct_yaw"] * c)
+        if y.get("frac_success_given_wrong_yaw") is not None:
+            n_ng += w
+            n_ng_s += round(y["frac_success_given_wrong_yaw"] * w)
+    print("\n【機構の直接の証拠】※ここでの「成功」も**自己一貫性**である")
+    print("  (a) セル別の条件付き率の中央値")
     if yc_ok:
-        print("  ヨーを正しく選べたときの成功率  中央値 %.3f (n=%d セル)"
-              % (np.median(yc_ok), len(yc_ok)))
+        print("      ヨー正解時 %.3f (n=%d セル) / 四分位 [%.3f, %.3f]"
+              % (np.median(yc_ok), len(yc_ok),
+                 np.percentile(yc_ok, 25), np.percentile(yc_ok, 75)))
     if yc_ng:
-        print("  ヨーを選び損ねたときの成功率    中央値 %.3f (n=%d セル)"
-              % (np.median(yc_ng), len(yc_ng)))
-    print("  → 後者が前者より大きく低いなら、ヨーの選択が成功率を決めていることになる")
+        print("      ヨー誤り時 %.3f (n=%d セル) / 四分位 [%.3f, %.3f]"
+              % (np.median(yc_ng), len(yc_ng),
+                 np.percentile(yc_ng, 25), np.percentile(yc_ng, 75)))
+    print("  (b) 全試行をプールした率（**こちらが P(成功|ヨー正解) にあたる**）")
+    if n_ok:
+        print("      ヨー正解時 %.3f (%d/%d 試行)" % (n_ok_s / n_ok, n_ok_s, n_ok))
+    if n_ng:
+        print("      ヨー誤り時 %.3f (%d/%d 試行)" % (n_ng_s / n_ng, n_ng_s, n_ng))
+    print("  → 後者が前者より大きく低いなら、ヨーの選択が結果を決めていることになる")
     if mg_ok and mg_ng:
         print("\n  候補スコアの1位-2位差（margin）")
         print("    正解したとき   中央値 %.5f (n=%d)" % (np.median(mg_ok), len(mg_ok)))
@@ -239,12 +282,17 @@ for m, c in zip(MODES, ["#4C78A8", "#E45756"]):
     ax.plot(x, ys_, "-o", color=c, label=m)
     ax.fill_between(x, lo, hi, color=c, alpha=0.18)
     for s in scenes:
-        v = [pick(s, lv, m) for lv in LEVELS]
-        ax.plot([lv * 100 for lv, r in zip(LEVELS, v) if r],
-                [r["success_rate"] for r in v if r], color=c, alpha=0.18, lw=0.8)
+        xs, ys2 = [], []
+        for lv in LEVELS:
+            rs = cells(s, lv, m)
+            if rs:
+                k, n = pool(rs)
+                xs.append(lv * 100); ys2.append(k / n)
+        ax.plot(xs, ys2, color=c, alpha=0.18, lw=0.8)
 ax.set_xlabel("reference coverage of the source floor area [%]")
-ax.set_ylabel("recovery success rate")
-ax.set_title("Success rate vs reference coverage (8 Replica scenes, 100 trials each)")
+ax.set_ylabel("SELF-CONSISTENCY rate (not accuracy)")
+ax.set_title("Self-consistency vs reference coverage\n"
+             "(8 Replica scenes; synthetic T_gt is the method's own output)")
 ax.invert_xaxis(); ax.grid(alpha=0.3); ax.legend()
 p = os.path.join(root, "success_vs_coverage.png")
 fig.tight_layout(); fig.savefig(p, dpi=150); plt.close(fig)
