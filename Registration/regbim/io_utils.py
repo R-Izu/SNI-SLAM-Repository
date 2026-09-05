@@ -54,17 +54,29 @@ def load_reference_cloud(cfg: Dict) -> LabeledCloud:
 # SLAM side: colours encode the 6-class label (decode_segmap palette).
 # --------------------------------------------------------------------------- #
 def _load_slam_mesh(spec: Dict) -> LabeledCloud:
+    """Sample the SLAM mesh into a labelled cloud.
+
+    ``seed`` makes the sampling reproducible. Open3D 0.13.0 does take a ``seed``
+    argument (``sample_points_uniformly(n, use_triangle_normal, seed=-1)``); an
+    earlier note in this repo claimed it did not, and that claim was wrong. Without
+    it every run drew a different 200k points, so two runs of identical code did
+    not agree (measured: direct rotation error 0.227 deg vs 0.556 deg, while the
+    success rate matched). ``-1`` keeps the old non-deterministic behaviour, so
+    configs that do not set ``seed`` are unaffected.
+    """
     mesh = o3d.io.read_triangle_mesh(spec["mesh_path"])
     if not mesh.has_vertex_colors():
         raise ValueError(f"SLAM mesh has no vertex colours: {spec['mesh_path']}")
     mesh.compute_vertex_normals()
     pcd = mesh.sample_points_uniformly(number_of_points=int(spec["n_points"]),
-                                        use_triangle_normal=True)
+                                       use_triangle_normal=True,
+                                       seed=int(spec.get("seed", -1)))
     points = np.asarray(pcd.points)
     labels = color_to_label(np.asarray(pcd.colors))
     normals = np.asarray(pcd.normals) if pcd.has_normals() else None
     return LabeledCloud(points=points, labels=labels, normals=normals,
-                        meta={"source": "slam_mesh", "path": spec["mesh_path"]})
+                        meta={"source": "slam_mesh", "path": spec["mesh_path"],
+                              "sample_seed": int(spec.get("seed", -1))})
 
 
 # --------------------------------------------------------------------------- #
