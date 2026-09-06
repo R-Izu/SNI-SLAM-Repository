@@ -72,62 +72,75 @@ The clouds have to be fixed for this comparison because the pipeline samples
 200k points from the mesh at load time, so two runs of identical code otherwise
 disagree. `register()` itself is deterministic (the RANSAC generator is seeded).
 
-## Result: it does not help, and the reason is more interesting than the fix
+## Result: it does not help, and my earlier explanation of why was wrong
 
-Measured against a ground truth built independently of the method (manual
-alignment in CloudCompare, refined by plain geometric ICP — the proposed method
-is not involved):
+**Retraction.** An earlier revision of this document reported that `plane_match`
+found a pose scoring **above** the independently built reference transform
+(0.339 vs 0.305), and concluded from that the selection objective was at fault.
+**That figure does not reproduce.** Re-measuring at the exact commit it came from
+(`50c34f2`) gives:
 
 | scene | mode | selection score | rotation error | translation error |
 |---|---|---:|---:|---:|
-| m3_cor_c E2 | reference transform | **0.305** | — | — |
-| m3_cor_c E2 | `centroid` | 0.136 | 90.6° | 20.1 m |
-| m3_cor_c E2 | `plane_match` | **0.339** | 179.4° | 13.8 m |
-| m3_cor_a E3 | reference transform | **0.489** | — | — |
-| m3_cor_a E3 | `centroid` | 0.220 | 0.1° | 10.6 m |
-| m3_cor_a E3 | `plane_match` | 0.346 | 90.1° | 37.8 m |
+| m3_cor_c E2 | reference transform | **0.306** | — | — |
+| m3_cor_c E2 | `centroid` | 0.135 | 90.4° | 20.1 m |
+| m3_cor_c E2 | `plane_match` | **0.092** | 179.6° | 15.8 m |
 
-On `m3_cor_c` the new seeds found a pose that **scores higher than the
-independently built reference transform** (0.339 vs 0.305) while being 179° wrong.
+The returned pose is the same one as before (179.6°, scale ratio 0.62); only the
+score differs. So the 0.339 was a measurement error on my side, not a property of
+the objective. Repeating with five different sampling seeds gives 0.073–0.092
+every time, and the reference transform scores highest in all five.
 
-The score being maximised is the class-constrained inlier ratio, the same
-criterion the method already used to pick among yaw candidates. What this
-establishes is a counterexample:
+**The objective is not shown to be broken.** What these numbers show is that the
+method's search does not reach the correct pose: the reference transform scores
+3.3× the best pose the method returns.
 
-> a badly wrong placement exists whose score exceeds the reference transform's.
+Reference against which this is measured: manual alignment in CloudCompare,
+refined by plain geometric ICP. The proposed method is not involved.
 
-That is enough to say **adding the correct transform to the candidate set does not
-by itself remove the inversion**. It does *not* show that the wrong pose is the
-global maximum of the score, nor that every pose within the success tolerance of
-the reference scores below it. Those are stronger statements and are not tested
-here.
+### What the scale sweep does show
 
-Under the conditions run, disabling the pre-ranking (`max_icp_candidates` 8 → 64,
-178 s instead of 52 s) returned the identical pose, so the pruning does not
-account for this instance.
+Holding the rotation and the image of the source centroid fixed and varying only
+the scale (`Registration/scripts/diag_scale_sweep.py`):
 
-### Scale is not the whole story
+- for the reference rotation the score peaks at scale ratio **1.005** (0.307), so
+  the objective does prefer the correct scale once the rotation is right;
+- the wrong pose peaks at **0.176** (scale ratio 0.725), still well below 0.307.
 
-The error metric reports `|s_method/s_ref - 1|`, which cannot distinguish shrinking
-from growing. The signed ratios do:
+The identity `N_C · Δρ = N_enter − N_leave` holds exactly in both sweeps — the
+denominator does not depend on the transform — which checks the instrumentation.
 
-| scene | mode | scale ratio | rotation error | score |
-|---|---|---:|---:|---:|
-| m3_cor_c E2 | `plane_match` | **0.644** (36% smaller) | 179.1° | 0.342 |
-| m3_cor_a E3 | `plane_match` | **1.007** (0.7% off) | 90.3° | 0.356 |
-| m3_cor_a E3 | `centroid` | 0.831 | 0.3° | 0.219 |
+### Reference-side coverage separates the two cleanly
 
-Shrinking the source packs more of it against a small reference, which raises the
-inlier count, and that fits `m3_cor_c`. It does not fit `m3_cor_a`: there the scale
-is correct to 0.7% and the pose still outscores the `centroid` result while being
-90° wrong. **A free scale is therefore not necessary for the inversion.**
+Fraction of reference points having a same-class source point within the gate:
 
-The objective has no term requiring the reference to be explained, and no prior on
-scale even though the input is metric (ARKit + LiDAR). Which of those matters, if
-either, is not yet established.
+| scene | reference transform | wrong pose |
+|---|---:|---:|
+| m3_cor_c E2 | **0.664** | 0.071 |
+| m3_cor_a E3 | **0.690** | 0.500 |
+
+The wrong poses leave most of the reference unexplained, and the current score
+only looks from the source side, so it cannot see this. A reference-side term
+would separate these cases. Whether it would help the *search* reach the right
+pose is a different question, and is not tested here.
+
+### Signed scale, for the record
+
+The error metric reports `|s_method/s_ref − 1|`, which cannot distinguish
+shrinking from growing:
+
+| scene | mode | scale ratio | rotation error |
+|---|---|---:|---:|
+| m3_cor_c E2 | `plane_match` | 0.621 (38% smaller) | 179.6° |
+| m3_cor_a E3 | `plane_match` | 1.007 (0.7% off) | 90.3° |
+| m3_cor_a E3 | `centroid` | 0.831 | 0.3° |
+
+The two failures differ in scale by a lot, so no single scale-based story covers
+both.
 
 ## Status
 
 The implementation is complete and the default is verified unchanged. Whether to
 adopt `plane_match` is not decided here: on this evidence the binding constraint
-is the selection criterion, not the seeding.
+is the search reaching the correct pose, not the objective ranking it. The reference
+transform outscores everything the method returns.
