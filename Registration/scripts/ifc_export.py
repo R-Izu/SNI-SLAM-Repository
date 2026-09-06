@@ -239,6 +239,8 @@ def space_records(f) -> List[Dict[str, object]]:
             "fill_ratio": round(foot / bbox, 3) if bbox > 0 else None,
             "z_range_m": [round(float(lo[2]), 3), round(float(hi[2]), 3)],
             "_cells": keys, "_cell_size": cell,
+            # 室内外の判定は壁厚より細かいラスタを要するので、幾何を残しておく
+            "_verts": v, "_faces": tri,
         })
     return out
 
@@ -273,6 +275,46 @@ def _horizontal_face_z(points: np.ndarray, normals: np.ndarray,
         return float(np.median(z))
     k = int(np.argmax(hist))
     return float(0.5 * (edges[k] + edges[k + 1]))
+
+
+def mark_inner_per_space(points: np.ndarray, normals: np.ndarray,
+                         recs: List[Dict],
+                         z_range: Optional[Tuple[float, float]] = None,
+                         probe: float = 0.30) -> Dict[int, np.ndarray]:
+    """**室ごとに**「その室の内側を向いた面か」を判定する。
+
+    なぜ室ごとなのか
+    ----------------
+    411 と 410 を隔てる壁は、**片面が 411 の室内面、もう片面が 410 の室内面**である。
+    「どこかの室の内側か」という単一のフラグでは、参照を 411 だけに絞ったときに
+    **410 を向いた面（スキャンからは見えない）を残してしまう。**
+
+    なぜ探査距離が 0.30 m なのか
+    ----------------------------
+    `IfcSpace` の占有ラスタは 0.1 m 刻みで、**壁厚 0.15 m より粗い**。
+    面から ±0.05 m ずらすと両点が同じセルに落ち、**共有壁では両面とも
+    「室内でない」と判定されていた**（実測 0/3020, 0/3108）。
+    判定に使う距離は、ラスタの刻みと壁厚の**どちらよりも大きく**取る必要がある。
+    代わりに、幅が 0.3 m に満たない狭い部位（扉の見込みなど）では判定が粗くなる。
+    """
+    out: Dict[int, np.ndarray] = {}
+    pp = points + probe * normals
+    pm = points - probe * normals
+    for r in recs:
+        if "_cells" not in r:
+            continue
+        cell = float(r["_cell_size"])
+        cells = set(map(tuple, r["_cells"].tolist()))
+        z0, z1 = z_range if z_range else r["z_range_m"]
+
+        def inside(q: np.ndarray) -> np.ndarray:
+            k = np.floor(q[:, :2] / cell).astype(np.int64)
+            inxy = np.fromiter((tuple(x) in cells for x in k.tolist()),
+                               dtype=bool, count=len(k))
+            return inxy & (q[:, 2] >= z0) & (q[:, 2] <= z1)
+
+        out[int(r["id"])] = inside(pp) & ~inside(pm)
+    return out
 
 
 def mark_inner(points: np.ndarray, normals: np.ndarray, recs: List[Dict],
@@ -438,7 +480,15 @@ def build_ifc_cloud(ifc_path: str, class_map: Dict, n_points: int,
     z_fl = _horizontal_face_z(pts, nrm, lab == NAME_TO_ID["floor"], want_up=True)
     z_ce = _horizontal_face_z(pts, nrm, lab == NAME_TO_ID["ceiling"], want_up=False)
     zr = (z_fl, z_ce) if (z_fl is not None and z_ce is not None and z_ce > z_fl) else None
-    is_inner = mark_inner(pts, nrm, recs, z_range=zr)
+    # ★ 室ごとに判定し、**要求された室**についてのみ OR を取る。
+    #   参照を 411 に絞ったとき、410 を向いた面（スキャンからは見えない）を
+    #   「室内面」として残さないため（R9 §3-3-2）。
+    per_space = mark_inner_per_space(pts, nrm, recs, z_range=zr)
+    sel_ids = want_ids if want_ids else [int(r["id"]) for r in recs if "_cells" in r]
+    is_inner = np.zeros(len(pts), dtype=bool)
+    for sid in sel_ids:
+        if sid in per_space:
+            is_inner |= per_space[sid]
     lo, hi = pts.min(axis=0), pts.max(axis=0)
     meta = {
         "room_z_range_m": (None if zr is None

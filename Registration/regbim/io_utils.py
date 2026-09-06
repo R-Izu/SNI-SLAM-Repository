@@ -44,6 +44,24 @@ def load_reference_cloud(cfg: Dict) -> LabeledCloud:
         cloud = _load_ifc_reference(spec, cfg["classes"])
     else:
         raise ValueError(f"unknown reference type: {spec['type']}")
+    # Keep only room-facing faces of the BIM solids (R9 §3-3). IFC elements are
+    # solids, so a wall contributes two surfaces 0.15-0.20 m apart -- inside the
+    # 0.3 m correspondence gate. The scan only ever sees the room-facing one, so
+    # with both present the method is pulled toward the middle of the wall while
+    # the reference transform was built against the room-facing side alone.
+    # Off by default: turning it on changes the reference for every method, so
+    # results are not comparable across the switch.
+    if spec.get("inner_only"):
+        inner = cloud.meta.get("is_inner")
+        if inner is None:
+            raise ValueError(
+                "reference.inner_only needs the is_inner flag; rebuild the cache "
+                "with Registration/scripts/ifc_export.py")
+        inner = np.asarray(inner, dtype=bool)
+        cloud = cloud.subset(inner)
+        cloud.meta = dict(cloud.meta, inner_only=True,
+                          n_points_after_inner_only=int(len(cloud)))
+
     # Partial-coverage study (R3 T3). Absent in every existing config, and a
     # no-op when absent, so previous results are unaffected.
     from .clip import clip_reference
