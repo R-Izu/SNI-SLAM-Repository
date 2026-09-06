@@ -110,6 +110,15 @@ proposed:
   # R3 T2。既定は現行のまま（median_axes）。Phase 1〜5 の結果を1つも変えないこと。
   scale_init: median_axes       # median_axes(既定) | vertical_only
 
+  # R6 §2。並進の初期化。既定は現行のまま（centroid）。
+  #   centroid    : 構造点の重心と、軸ごとの範囲の中点で合わせる（現行）
+  #   plane_match : 壁の1次元プロファイルの相互相関で合わせる（被覆に不変）
+  translation_init: centroid    # centroid(既定) | plane_match
+  plane_match_bin_m: 0.05       # ヒストグラムのビン幅 [m]
+  plane_match_top_k: 3          # 軸ごとに残す候補数
+  plane_match_max_shift_m: 30.0 # 探索するオフセットの上限 [m]
+  max_icp_candidates: 8         # ICP を回す候補の上限（粗いスコアで絞ってから）
+
 baseline_open3d:
   voxel_size: 0.05
   fpfh_radius: 0.25

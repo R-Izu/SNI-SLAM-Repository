@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .. import preprocess, rotation
+from .. import plane_match, preprocess, rotation
 from ..labels import NAME_TO_ID, LabeledCloud
 from ..metrics import (apply_sim3, chamfer_distance, class_inlier_ratio,
                        decompose_sim3, make_sim3)
@@ -121,6 +121,65 @@ def axis_spans(points: np.ndarray, labels: np.ndarray, axes) -> Dict:
     return {k: _axis_span(points, labels, ids, e) for k, e, ids in axes}
 
 
+def _translation_candidates(init_T: np.ndarray, src_rot: np.ndarray,
+                            labels: np.ndarray, dst_p: LabeledCloud,
+                            axes, pcfg: Dict) -> List[np.ndarray]:
+    """Alternative seeds whose translation comes from matching wall positions.
+
+    ``init_T`` is the existing centroid/extent seed; its rotation and scale are
+    kept and only the translation is replaced, so this changes one thing at a
+    time. The vertical component uses the floor plane (a single peak), the two
+    horizontal components use the 1-D wall profile correlation.
+
+    Returns the *extra* candidates only -- ``init_T`` itself is already in the
+    list built by the caller.
+    """
+    R, t0, s = decompose_sim3(init_T)
+    wall_id, floor_id = NAME_TO_ID["wall"], NAME_TO_ID["floor"]
+    src_wall = src_rot[labels == wall_id]
+    dst_wall = dst_p.points[dst_p.labels == wall_id]
+    src_floor = src_rot[labels == floor_id]
+    dst_floor = dst_p.points[dst_p.labels == floor_id]
+
+    bin_m = float(pcfg.get("plane_match_bin_m", 0.05))
+    top_k = int(pcfg.get("plane_match_top_k", 3))
+    max_shift = float(pcfg.get("plane_match_max_shift_m", 30.0))
+
+    # Vertical: floors give one sharp peak, so take the plane offset directly.
+    up = axes[2][1]
+    dz = None
+    if len(src_floor) >= 10 and len(dst_floor) >= 10:
+        dz = plane_match.plane_offset(s * (src_floor @ up), dst_floor @ up)
+
+    # Horizontal: correlate the wall profiles on each canonical axis.
+    per_axis: List[List[float]] = []
+    for key, e, _ in axes[:2]:
+        if len(src_wall) < 10 or len(dst_wall) < 10:
+            per_axis.append([])
+            continue
+        cands = plane_match.offset_candidates(
+            s * (src_wall @ e), dst_wall @ e, bin_m=bin_m, top_k=top_k,
+            max_shift_m=max_shift)
+        per_axis.append([d for d, _ in cands])
+
+    # `offset_candidates` returns d with the meaning "s*(src . e) + d lines up with
+    # dst . e", so d IS the new translation component along e -- it replaces the
+    # old one rather than being added to it.
+    out: List[np.ndarray] = []
+    for dx in (per_axis[0] or [None]):
+        for dy in (per_axis[1] or [None]):
+            if dx is None and dy is None and dz is None:
+                continue
+            t = t0.copy()
+            for comp, e in ((dx, axes[0][1]), (dy, axes[1][1]), (dz, up)):
+                if comp is not None:
+                    t = t - (t @ e) * e + comp * e
+            T = make_sim3(R, t, s)
+            if not np.allclose(T, init_T):
+                out.append(T)
+    return out
+
+
 def _struct_centroid(points: np.ndarray, labels: np.ndarray,
                      struct_ids: List[int]) -> np.ndarray:
     mask = np.isin(labels, struct_ids)
@@ -192,20 +251,51 @@ class Proposed(BaseRegistration):
         # decide it have to be observable. Opt-in via config so every existing
         # config produces byte-identical output; the method itself is unchanged.
         record_yaw = bool((cfg.get("diagnostics") or {}).get("record_yaw", False))
+        pcfg = cfg.get("proposed") or {}
+        scale_init = str(pcfg.get("scale_init", "median_axes"))
+        translation_init = str(pcfg.get("translation_init", "centroid"))
         cand_scores: List[float] = []
         cand_T: List[List[List[float]]] = []
         plane_T = None
         plane_trace: Optional[Tracer] = None
         best_score = -np.inf
+
+        # Build the pose candidates. With `centroid` there is exactly one per yaw,
+        # which is the original behaviour; `plane_match` may add a few translation
+        # candidates per yaw (see _translation_candidates).
+        seeds: List[Tuple[np.ndarray, np.ndarray]] = []      # (init_T, R)
         for R in candidates:
             src_rot = src_p.points @ R.T                   # source in reference frame
             c_src = _struct_centroid(src_rot, src_p.labels, struct_ids)
             init_T = self._plane_seed(src_rot, src_p.labels, R, axes, dst_span,
                                       c_dst, c_src,
                                       fixed_scale=bool(abl.get("fixed_scale")),
-                                      scale_init=str((cfg.get("proposed") or {})
-                                                     .get("scale_init", "median_axes")))
-            # Each yaw candidate gets its own tracer; only the winner's trajectory
+                                      scale_init=scale_init)
+            seeds.append((init_T, R))
+            if translation_init == "plane_match":
+                seeds.extend(
+                    (T_alt, R) for T_alt in
+                    _translation_candidates(init_T, src_rot, src_p.labels,
+                                            dst_p, axes, pcfg))
+            elif translation_init != "centroid":
+                raise ValueError("unknown proposed.translation_init: %r"
+                                 % translation_init)
+
+        if translation_init == "plane_match":
+            # Scoring every seed with a full ICP would multiply the cost by the
+            # number of candidates. Rank them at the seed pose first (no ICP) and
+            # only run ICP on the best few. The `centroid` path skips this and runs
+            # ICP on its single seed per yaw, exactly as before.
+            keep = int(pcfg.get("max_icp_candidates", 8))
+            seeds = sorted(
+                seeds,
+                key=lambda s: -class_inlier_ratio(src_score, dst_score, s[0], thresh)
+            )[:max(keep, 1)]
+
+        cand_R: List[np.ndarray] = []
+        for init_T, R in seeds:
+            cand_R.append(R)
+            # Each candidate gets its own tracer; only the winner's trajectory
             # is surfaced, so the reported curve is a single coherent ICP run.
             cand_tracer = Tracer(tracer.stride) if tracer is not None else None
             T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True,
@@ -233,9 +323,13 @@ class Proposed(BaseRegistration):
                 "margin": (round(cand_scores[order[0]] - cand_scores[order[1]], 5)
                            if len(cand_scores) > 1 else None),
                 # 正解の候補を決めるのは呼び出し側（期待する回転を知っているのは評価側）。
-                # ここでは候補の回転そのものを渡す
-                "candidate_R": [R.tolist() for R in candidates],
+                # ここでは候補の回転そのものを渡す。**`candidate_scores` と同じ順序**
+                # であることが必要で、plane_match では1つのヨーに複数の並進候補が
+                # 対応するので、ヨーの一覧ではなく**採点した順**に並べる。
+                "candidate_R": [R.tolist() for R in cand_R],
                 "candidate_T": cand_T,
+                "translation_init": translation_init,
+                "n_seeds_scored": len(cand_scores),
             }
 
         # --- stage 2: centroid-refine translation at the locked (R, s) -----------
