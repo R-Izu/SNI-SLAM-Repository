@@ -80,33 +80,51 @@ is not involved):
 
 | scene | mode | selection score | rotation error | translation error |
 |---|---|---:|---:|---:|
-| m3_cor_c E2 | ground truth | **0.305** | — | — |
+| m3_cor_c E2 | reference transform | **0.305** | — | — |
 | m3_cor_c E2 | `centroid` | 0.136 | 90.6° | 20.1 m |
 | m3_cor_c E2 | `plane_match` | **0.339** | 179.4° | 13.8 m |
-| m3_cor_a E3 | ground truth | **0.489** | — | — |
+| m3_cor_a E3 | reference transform | **0.489** | — | — |
 | m3_cor_a E3 | `centroid` | 0.220 | 0.1° | 10.6 m |
 | m3_cor_a E3 | `plane_match` | 0.346 | 90.1° | 37.8 m |
 
-On `m3_cor_c` the new seeds found a pose that **scores higher than the ground
-truth does** (0.339 vs 0.305) while being 179° wrong.
+On `m3_cor_c` the new seeds found a pose that **scores higher than the
+independently built reference transform** (0.339 vs 0.305) while being 179° wrong.
 
 The score being maximised is the class-constrained inlier ratio, the same
-criterion the method already used to pick among yaw candidates. The measurement
-above says that under partial coverage **its global optimum is not the correct
-pose**. Adding better seeds therefore cannot fix the problem; it gives the
-selector more opportunities to prefer something wrong.
+criterion the method already used to pick among yaw candidates. What this
+establishes is a counterexample:
 
-This was checked against the obvious confound. The pre-ranking step prunes
-candidates before ICP, which is a change in kind from the existing code. Running
-`plane_match` with the pruning disabled (`max_icp_candidates: 64`, 178 s instead
-of 52 s) returns the identical pose, so the pruning is not the cause.
+> a badly wrong placement exists whose score exceeds the reference transform's.
 
-A plausible mechanism, not yet tested: scale is free during ICP
-(`semantic_icp` updates it even when the rotation is fixed), and the wrong poses
-above carry scale errors of 0.36–0.38. Shrinking the source packs more of it
-against a small reference, which raises the inlier count. The objective has no
-term requiring the reference to be explained, and no prior on scale even though
-the input is metric (ARKit + LiDAR).
+That is enough to say **adding the correct transform to the candidate set does not
+by itself remove the inversion**. It does *not* show that the wrong pose is the
+global maximum of the score, nor that every pose within the success tolerance of
+the reference scores below it. Those are stronger statements and are not tested
+here.
+
+Under the conditions run, disabling the pre-ranking (`max_icp_candidates` 8 → 64,
+178 s instead of 52 s) returned the identical pose, so the pruning does not
+account for this instance.
+
+### Scale is not the whole story
+
+The error metric reports `|s_method/s_ref - 1|`, which cannot distinguish shrinking
+from growing. The signed ratios do:
+
+| scene | mode | scale ratio | rotation error | score |
+|---|---|---:|---:|---:|
+| m3_cor_c E2 | `plane_match` | **0.644** (36% smaller) | 179.1° | 0.342 |
+| m3_cor_a E3 | `plane_match` | **1.007** (0.7% off) | 90.3° | 0.356 |
+| m3_cor_a E3 | `centroid` | 0.831 | 0.3° | 0.219 |
+
+Shrinking the source packs more of it against a small reference, which raises the
+inlier count, and that fits `m3_cor_c`. It does not fit `m3_cor_a`: there the scale
+is correct to 0.7% and the pose still outscores the `centroid` result while being
+90° wrong. **A free scale is therefore not necessary for the inversion.**
+
+The objective has no term requiring the reference to be explained, and no prior on
+scale even though the input is metric (ARKit + LiDAR). Which of those matters, if
+either, is not yet established.
 
 ## Status
 
