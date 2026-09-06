@@ -97,9 +97,11 @@ def semantic_icp(
 
         if rotation_fixed:
             src_rot = src_corr @ R_fixed.T
-            t, s = scale_translation(src_rot, dst_corr, w)
-            if not with_scaling:
-                s = 1.0
+            # Pin the scale *inside* the solve. Overwriting s afterwards leaves t
+            # at the free-scale solution and displaces the result by metres
+            # (see scale_translation). umeyama, below, already does this right.
+            t, s = scale_translation(src_rot, dst_corr, w,
+                                     fixed_scale=None if with_scaling else 1.0)
             T_new = make_sim3(R_fixed, t, s)
         else:
             R, t, s = umeyama(src_corr, dst_corr, w, with_scaling=with_scaling)

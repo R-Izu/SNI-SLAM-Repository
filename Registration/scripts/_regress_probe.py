@@ -36,6 +36,7 @@ def main() -> int:
     ap.add_argument("--dump", default=None)
     ap.add_argument("--load", default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--method", default="proposed")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(open(args.config))
@@ -59,7 +60,7 @@ def main() -> int:
     dst = LabeledCloud(points=z["dp"], labels=z["dl"],
                        normals=z["dn"] if len(z["dn"]) else None)
 
-    T = get_method("proposed").register(src, dst, cfg)
+    T = get_method(args.method).register(src, dst, cfg)
     out = {"T": np.asarray(T, dtype=np.float64).tolist()}
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)

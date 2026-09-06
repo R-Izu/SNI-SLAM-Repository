@@ -58,10 +58,20 @@ def scale_translation(
     src: np.ndarray,
     dst: np.ndarray,
     weights: Optional[np.ndarray] = None,
+    fixed_scale: Optional[float] = None,
 ) -> Tuple[np.ndarray, float]:
     """With rotation fixed (R = I), solve for scale s and translation t.
 
     Minimises sum w |dst - (s src + t)|^2. Returns ``(t (3,), s)``.
+
+    ``fixed_scale`` pins s and solves for t **under that s**.
+
+    Callers wanting a fixed scale must use this instead of overwriting the
+    returned s. t depends on s through ``t = mu_dst - s mu_src``, so replacing s
+    afterwards leaves t at the free-scale solution, displacing the result by
+    ``(s_free - s) mu_src`` -- metres, when the source centroid sits metres from
+    the origin. ``umeyama`` already fixes s before computing t; this path did not,
+    and ``proposed_fixed_scale`` went through this path in both of its ICP stages.
     """
     src = np.asarray(src, dtype=np.float64)
     dst = np.asarray(dst, dtype=np.float64)
@@ -73,10 +83,13 @@ def scale_translation(
 
     mu_src = (w[:, None] * src).sum(axis=0)
     mu_dst = (w[:, None] * dst).sum(axis=0)
-    src_c = src - mu_src
-    dst_c = dst - mu_dst
-    num = (w * (src_c * dst_c).sum(axis=1)).sum()
-    den = (w * (src_c ** 2).sum(axis=1)).sum()
-    s = float(num / (den + 1e-12))
+    if fixed_scale is None:
+        src_c = src - mu_src
+        dst_c = dst - mu_dst
+        num = (w * (src_c * dst_c).sum(axis=1)).sum()
+        den = (w * (src_c ** 2).sum(axis=1)).sum()
+        s = float(num / (den + 1e-12))
+    else:
+        s = float(fixed_scale)
     t = mu_dst - s * mu_src
     return t, s
