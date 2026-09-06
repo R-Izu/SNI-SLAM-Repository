@@ -17,6 +17,7 @@ reference:
   - ceiling
   - door
   - window
+  inner_only: true
   cache_path: Registration/output/ifc/m3_ifc_411.npz
 classes:
   names:

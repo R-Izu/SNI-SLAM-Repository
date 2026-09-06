@@ -51,7 +51,11 @@ def load_reference_cloud(cfg: Dict) -> LabeledCloud:
     # the reference transform was built against the room-facing side alone.
     # Off by default: turning it on changes the reference for every method, so
     # results are not comparable across the switch.
-    if spec.get("inner_only"):
+    # Default on for IFC references (R10 §2): the scan can only ever observe the
+    # room-facing side, so including the far side is a defect in how the reference
+    # was built, not a property of the problem. Set `inner_only: false` to get the
+    # old both-sides reference back for comparison.
+    if spec.get("inner_only", True):
         inner = cloud.meta.get("is_inner")
         if inner is None:
             raise ValueError(

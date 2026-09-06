@@ -28,6 +28,9 @@ reference:
   keep_classes: [wall, floor, ceiling, door, window]
   # sni-slam(py3.7) は ifcopenshell を持てないので、bim-ifc で作った .npz を読む。
   # 無ければ io_utils が生成コマンドを添えて停止する。
+  # R10 §2: 参照は室内面のみを既定にする。スキャンが観測できるのは室内側だけで、
+  # 裏面を含めるのは参照の作り方の欠陥である。両面版は inner_only: false で選べる。
+  inner_only: true
   cache_path: Registration/output/ifc/m3_ifc_all.npz
 
 classes:
