@@ -36,7 +36,31 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 sys.path.insert(0, os.path.join(REPO, "Registration"))
 os.chdir(REPO)
 
-from regbim.metrics import decompose_sim3, rotation_error_deg    # noqa: E402
+from regbim import io_utils                                      # noqa: E402
+from regbim.metrics import (apply_sim3, decompose_sim3,          # noqa: E402
+                            rotation_error_deg)
+
+
+def provenance() -> Dict:
+    """どの版で出た数値かを出力自身に残す。
+
+    R12 の分類は、報告した数値を出した修正がコミットされておらず、
+    後から再現できなかった。**作業ツリーが汚れているかまで記録する**ので、
+    「commit は合っているが手元で書き換えていた」も検出できる。
+    """
+    import subprocess
+
+    def run(*a):
+        try:
+            return subprocess.check_output(a, cwd=REPO,
+                                           stderr=subprocess.DEVNULL).decode().strip()
+        except Exception:
+            return None
+
+    dirty = run("git", "status", "--short")
+    return {"commit": run("git", "rev-parse", "HEAD"),
+            "branch": run("git", "rev-parse", "--abbrev-ref", "HEAD"),
+            "dirty": bool(dirty), "dirty_files": (dirty or "").splitlines()}
 
 
 def wilson(k: int, n: int, z: float = 1.96):
@@ -49,7 +73,15 @@ def wilson(k: int, n: int, z: float = 1.96):
     return c - h, c + h
 
 
-def classify(row: Dict, G: np.ndarray, rot_tol: float, basin: float) -> Dict:
+def classify(row: Dict, G: np.ndarray, rot_tol: float, basin: float,
+             p0: np.ndarray) -> Dict:
+    """候補を (i)/(ii)/(iii)/ok に分類する。
+
+    ``p0`` は**姿勢のずれを測るための基準点**（source の重心）。
+    R10 §3-2 のとおり、**生の並進ベクトル差 ``T[:3,3] - G[:3,3]`` を使ってはならない**。
+    Sim(3) の並進成分は source 原点の取り方に依存するので、姿勢のずれの尺度にならない
+    （同一データで 5.274 m と 0.910 m の差が出る）。基準点の**行き先**の距離で測る。
+    """
     cR = row.get("yaw_candidate_R")
     cT = row.get("yaw_candidate_T")
     if not cR or not cT:
@@ -60,10 +92,11 @@ def classify(row: Dict, G: np.ndarray, rot_tol: float, basin: float) -> Dict:
     if not near:
         return {"class": "i_no_candidate", "min_cand_rot_deg": float(min(rot))}
     # GT に近い候補のうち、ICP 後に GT へいちばん寄ったもの
+    gp = apply_sim3(G, p0[None])[0]
     d = {}
     for i in near:
         T = np.asarray(cT[i], dtype=np.float64)
-        d[i] = float(np.linalg.norm((T[:3, 3] - G[:3, 3])))
+        d[i] = float(np.linalg.norm(apply_sim3(T, p0[None])[0] - gp))
     best = min(d, key=d.get)
     winner = row.get("yaw_winner")
     if d[best] > basin:
@@ -101,9 +134,12 @@ def main() -> int:
         G = np.asarray(json.load(open(cfg["eval"]["t_gt_path"]))["T_gt"],
                        dtype=np.float64)
         inner = blob.get("inner_only")
+        # 姿勢のずれの基準点。source は inner_only に依存しないので sweep ごとに1回。
+        cfg["reference"] = dict(cfg["reference"], inner_only=bool(inner))
+        p0 = io_utils.load_source_cloud(cfg).points.mean(axis=0)
         for mode in sorted({r["mode"] for r in blob["rows"]}):
             rows = [r for r in blob["rows"] if r["mode"] == mode]
-            cls = [classify(r, G, args.rot_tol, args.basin) for r in rows]
+            cls = [classify(r, G, args.rot_tol, args.basin, p0) for r in rows]
             n = len(cls)
             counts: Dict[str, int] = {}
             for c in cls:
@@ -133,7 +169,8 @@ def main() -> int:
                                      for c, r in zip(cls, rows)]})
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:
-        json.dump(out, f, indent=2, ensure_ascii=False)
+        json.dump({"provenance": provenance(), "rows": out},
+                  f, indent=2, ensure_ascii=False)
     print("wrote %s" % args.out)
     return 0
 
