@@ -84,6 +84,10 @@ def main() -> int:
                 "signed_scale": float(decompose_sim3(T)[2] / sG),
                 "yaw_winner": d.get("winner"), "yaw_margin": d.get("margin"),
                 "yaw_candidate_scores": d.get("candidate_scores"),
+                # 失敗の3分類（R11 §3）に必要。候補ごとの回転と ICP 後の解が無いと、
+                # 「候補が無い／収束しない／順位で負けた」を区別できない
+                "yaw_candidate_R": d.get("candidate_R"),
+                "yaw_candidate_T": d.get("candidate_T"),
                 "n_seeds_scored": d.get("n_seeds_scored"),
             })
             print("%-12s %5d %9.5f %9.5f %9.2f %9.3f %9.4f %8s"
