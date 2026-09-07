@@ -193,6 +193,7 @@ class Proposed(BaseRegistration):
         # config produces byte-identical output; the method itself is unchanged.
         record_yaw = bool((cfg.get("diagnostics") or {}).get("record_yaw", False))
         cand_scores: List[float] = []
+        cand_T: List[List[List[float]]] = []
         plane_T = None
         plane_trace: Optional[Tracer] = None
         best_score = -np.inf
@@ -212,6 +213,11 @@ class Proposed(BaseRegistration):
             score = class_inlier_ratio(src_score, dst_score, T, thresh)
             if record_yaw:
                 cand_scores.append(float(score))
+                # Each candidate's post-ICP pose, not just its score. From the
+                # winner alone, "the right candidate was never generated", "it was
+                # generated but did not converge" and "it converged but lost on
+                # score" cannot be told apart (R11 §3).
+                cand_T.append(np.asarray(T, dtype=np.float64).tolist())
             if score > best_score:
                 best_score = score
                 plane_T = T
@@ -229,6 +235,7 @@ class Proposed(BaseRegistration):
                 # 正解の候補を決めるのは呼び出し側（期待する回転を知っているのは評価側）。
                 # ここでは候補の回転そのものを渡す
                 "candidate_R": [R.tolist() for R in candidates],
+                "candidate_T": cand_T,
             }
 
         # --- stage 2: centroid-refine translation at the locked (R, s) -----------
