@@ -44,18 +44,17 @@ def load_reference_cloud(cfg: Dict) -> LabeledCloud:
         cloud = _load_ifc_reference(spec, cfg["classes"])
     else:
         raise ValueError(f"unknown reference type: {spec['type']}")
-    # Keep only room-facing faces of the BIM solids (R9 §3-3). IFC elements are
-    # solids, so a wall contributes two surfaces 0.15-0.20 m apart -- inside the
+    # Keep only room-facing faces of the BIM solids (R9 §3-3, R10 §2). IFC elements
+    # are solids, so a wall contributes two surfaces 0.15-0.20 m apart -- inside the
     # 0.3 m correspondence gate. The scan only ever sees the room-facing one, so
     # with both present the method is pulled toward the middle of the wall while
     # the reference transform was built against the room-facing side alone.
-    # Off by default: turning it on changes the reference for every method, so
-    # results are not comparable across the switch.
-    # Default on for IFC references (R10 §2): the scan can only ever observe the
-    # room-facing side, so including the far side is a defect in how the reference
-    # was built, not a property of the problem. Set `inner_only: false` to get the
-    # old both-sides reference back for comparison.
-    if spec.get("inner_only", True):
+    #
+    # On by default for IFC only. Replica's reference is a surface mesh with no far
+    # side, so there is nothing to filter and no is_inner flag to filter by;
+    # defaulting this on for every reference type made Replica configs raise.
+    # Set `inner_only: false` to get the both-sides reference back for comparison.
+    if spec.get("inner_only", spec["type"] == "ifc"):
         inner = cloud.meta.get("is_inner")
         if inner is None:
             raise ValueError(

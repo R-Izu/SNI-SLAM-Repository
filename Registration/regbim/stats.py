@@ -41,7 +41,16 @@ def error_percentiles(values: Sequence[float]) -> Dict[str, float]:
 
 
 def check_success(err: Dict[str, float], thresholds: Dict[str, float]) -> bool:
-    """True when every error component is below its threshold."""
+    """True when every error component is below its threshold.
+
+    A degenerate transform is vetoed outright. A collapsed solution sits on top
+    of any other collapsed solution, so its translation and scale errors are ~0
+    and pass whatever the thresholds are, leaving the verdict to a comparison of
+    two arbitrary rotations. Before this veto, 94 such trials in T3 were
+    recorded as successes (R15 §1).
+    """
+    if err.get("degenerate"):
+        return False
     return all(err[k] < thresholds[k] for k in ERROR_KEYS)
 
 

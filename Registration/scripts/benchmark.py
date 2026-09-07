@@ -25,6 +25,11 @@ from regbim import io_utils, metrics, stats
 from regbim.config import load_config, load_t_gt
 from regbim.methods import available_methods, get_method
 
+# 「その候補は正しい回転モードか」の許容角（R13 §1-3）。
+# 候補は厳密に 90 度刻み（`rotation.py`）なので、5 度と 45 度のどちらを選んでも
+# 分類は変わらない。成功判定の回転閾値と同じ 5 度に揃えてある。
+YAW_MODE_TOL_DEG = 5.0
+
 
 def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
               cfg: Dict, trials: int, seed: int) -> Tuple[Dict, List[Dict]]:
@@ -117,13 +122,28 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
                 # ★ 命名規約（R7 §3-4）：自己一貫性の量は必ず `selfconsistency_` を、
                 #   GT 基準の量は `gt_` を頭に付ける。前回の混同は、両方が
                 #   `picked_correct` という同じ名前だったことが直接の原因だった。
+                # R13 §1-3: 正誤は**候補番号ではなく回転モードで**定義する。
+                # 番号の一致で定義すると、(a) 同じ回転の候補が複数あるとき
+                # `argmin` が最初の1つしか返さず、同じ回転を選んでも「不正解」に
+                # なり、(b) どの候補も遠いとき「最も近い番号」が自動的に正解に
+                # なってしまう。回転誤差そのものに閾値を当てれば両方消える。
                 yaw_diag = {
                     "candidate_scores": d["candidate_scores"],
                     "winner": w,
                     "margin": d["margin"],
                     "selfconsistency_correct_idx": int(np.argmin(errs)),
                     "selfconsistency_winner_rot_err_deg": round(errs[w], 3),
-                    "selfconsistency_picked_correct": bool(int(np.argmin(errs)) == w),
+                    "selfconsistency_best_possible_rot_err_deg":
+                        round(float(min(errs)), 3),
+                    # 番号一致（旧定義）。比較のために残すが、判断には使わない。
+                    "selfconsistency_picked_correct_idx":
+                        bool(int(np.argmin(errs)) == w),
+                    # 回転モードによる定義（こちらを使う）
+                    "selfconsistency_picked_correct":
+                        bool(errs[w] < YAW_MODE_TOL_DEG),
+                    "selfconsistency_correct_exists":
+                        bool(min(errs) < YAW_MODE_TOL_DEG),
+                    "degenerate": bool(e.get("degenerate", False)),
                 }
                 if T_ref_or_none is not None:
                     R_exp_gt = metrics.decompose_sim3(
@@ -134,7 +154,9 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
                         "gt_correct_idx": int(np.argmin(egt)),
                         "gt_winner_rot_err_deg": round(egt[w], 3),
                         "gt_best_possible_rot_err_deg": round(float(min(egt)), 3),
-                        "gt_picked_correct": bool(int(np.argmin(egt)) == w),
+                        "gt_picked_correct_idx": bool(int(np.argmin(egt)) == w),
+                        "gt_picked_correct": bool(egt[w] < YAW_MODE_TOL_DEG),
+                        "gt_correct_exists": bool(min(egt) < YAW_MODE_TOL_DEG),
                     })
         if yaw_diag is not None:
             # ★ trials.csv には入れない。列が1つ増えるだけで既存の出力と
@@ -155,6 +177,10 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
             "selfconsistency_scale_ratio": round(e["scale_ratio"], 5),
             "selfconsistency_success": bool(ok),
             "selfconsistency_success_strict": ok_strict,
+            # R15 §1: 潰れた解（s→0）は誤差が全成分 ~0 になり閾値を無条件に通る。
+            # `check_success` で拒否済みだが、**何件潰れたかは別に数える**。
+            # 除外を黙って行うと「成功率が下がった」だけが見えて理由が消える。
+            "degenerate": bool(e.get("degenerate", False)),
             "time_s": round(dt, 3),
         }
         if e_gt is not None:
@@ -191,6 +217,8 @@ def _evaluate(method_name: str, src, dst, T_ref_or_none: Optional[np.ndarray],
         "selfconsistency_med_rot_deg": round(med(rot_errs), 3),
         "selfconsistency_med_trans": round(med(trans_errs), 4),
         "selfconsistency_med_scale_ratio": round(med(scale_errs), 4),
+        # R15 §1。0 でないなら、その cell の成功率は分母の意味が変わっている。
+        "n_degenerate": int(sum(bool(r.get("degenerate")) for r in trial_records)),
         "med_time_s": round(med(times), 3),
     }
 

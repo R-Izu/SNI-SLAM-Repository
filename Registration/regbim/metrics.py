@@ -25,8 +25,33 @@ def apply_sim3(T: np.ndarray, points: np.ndarray) -> np.ndarray:
     return points @ T[:3, :3].T + T[:3, 3]
 
 
+# Below this scale a Sim3 has collapsed towards a point and the rotation
+# recovered from it carries no information: decompose_sim3 floors det at 1e-18,
+# so s bottoms out at exactly 1e-6 and `M / s` is a near-zero matrix whose
+# re-orthonormalisation returns an arbitrary rotation. Not hypothetical -- the
+# ICP scale in the T3 office_0 `ne` cells shrinks monotonically to 1e-30 (R15).
+SIM3_MIN_SCALE = 1e-4
+
+
+def is_degenerate_sim3(T: np.ndarray, min_scale: float = SIM3_MIN_SCALE) -> bool:
+    """True when T has collapsed so far that its rotation is meaningless.
+
+    Any comparison against a degenerate transform is invalid -- and, worse,
+    *flattering*: two collapsed transforms sit on top of each other, so the
+    translation and scale errors between them go to ~0 and pass any threshold,
+    leaving success to be decided by a comparison of two arbitrary rotations.
+    Treat a degenerate result as invalid, never as a success.
+    """
+    M = np.asarray(T, dtype=np.float64)[:3, :3]
+    return float(np.cbrt(max(np.linalg.det(M), 1e-18))) < min_scale
+
+
 def decompose_sim3(T: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float]:
-    """Return (R, t, s) from a Sim3 matrix (assumes isotropic scale)."""
+    """Return (R, t, s) from a Sim3 matrix (assumes isotropic scale).
+
+    The 1e-18 floor keeps this total for collapsed inputs, but the R it returns
+    is then arbitrary -- check ``is_degenerate_sim3`` before trusting it.
+    """
     M = T[:3, :3]
     s = float(np.cbrt(max(np.linalg.det(M), 1e-18)))
     R = M / s
@@ -58,6 +83,10 @@ def sim3_errors(T_est: np.ndarray, T_gt: np.ndarray) -> Dict[str, float]:
         "rot_deg": rotation_error_deg(Re, Rg),
         "trans": translation_error(te, tg),
         "scale_ratio": scale_error_ratio(se, sg),
+        # Carried alongside the errors because the errors themselves cannot
+        # reveal this: when both transforms have collapsed, every component
+        # reads ~0. Reported per trial, and vetoed in stats.check_success.
+        "degenerate": bool(is_degenerate_sim3(T_est) or is_degenerate_sim3(T_gt)),
     }
 
 
