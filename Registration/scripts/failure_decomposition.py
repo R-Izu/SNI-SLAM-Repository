@@ -77,10 +77,22 @@ def classify(row: Dict, G: np.ndarray, rot_tol: float, basin: float,
              p0: np.ndarray) -> Dict:
     """候補を (i)/(ii)/(iii)/ok に分類する。
 
-    ``p0`` は**姿勢のずれを測るための基準点**（source の重心）。
-    R10 §3-2 のとおり、**生の並進ベクトル差 ``T[:3,3] - G[:3,3]`` を使ってはならない**。
+    ``p0`` は**姿勢のずれを測るための基準点**。R10 §3-2 のとおり、
+    **生の並進ベクトル差 ``T[:3,3] - G[:3,3]`` を使ってはならない**。
     Sim(3) の並進成分は source 原点の取り方に依存するので、姿勢のずれの尺度にならない
     （同一データで 5.274 m と 0.910 m の差が出る）。基準点の**行き先**の距離で測る。
+
+    **``p0`` の取り方で分類が変わる**（`--p0` で選ぶ。既定は ``source``）：
+
+    ==============  ==========================================  =========  =======
+    ``--p0``        基準点                                       中央値     (iii)
+    ==============  ==========================================  =========  =======
+    ``source``      位置合わせに使った source 点群の重心          0.910 m    33
+    ``gt_mesh``     ``output/GT_alignment/source/<scene>.ply``   0.970 m    18
+    ==============  ==========================================  =========  =======
+
+    **どちらも「基準点変位」だが、境界 1.0 m の近くなので分類が動く。**
+    **R10 §3-2 が測った基準の広がり（最大 0.433 m）が、ここでも効いている。**
     """
     cR = row.get("yaw_candidate_R")
     cT = row.get("yaw_candidate_T")
@@ -91,7 +103,8 @@ def classify(row: Dict, G: np.ndarray, rot_tol: float, basin: float,
     near = [i for i, r in enumerate(rot) if r < rot_tol]
     if not near:
         return {"class": "i_no_candidate", "min_cand_rot_deg": float(min(rot))}
-    # GT に近い候補のうち、ICP 後に GT へいちばん寄ったもの
+    # GT に近い候補のうち、ICP 後に GT へいちばん寄ったもの。
+    # 距離は **基準点 p0 の変位**で測る（R10 §3-2）。
     gp = apply_sim3(G, p0[None])[0]
     d = {}
     for i in near:
@@ -115,6 +128,8 @@ def main() -> int:
     ap.add_argument("--sweeps", nargs="+", required=True)
     ap.add_argument("--rot-tol", type=float, default=5.0)
     ap.add_argument("--basin", type=float, default=1.0)
+    ap.add_argument("--p0", choices=["source", "gt_mesh"], default="source",
+                    help="姿勢のずれを測る基準点。分類が変わるので明示する")
     ap.add_argument("--out", default="Registration/output/diag/failure_decomposition.json")
     args = ap.parse_args()
 
@@ -134,9 +149,17 @@ def main() -> int:
         G = np.asarray(json.load(open(cfg["eval"]["t_gt_path"]))["T_gt"],
                        dtype=np.float64)
         inner = blob.get("inner_only")
-        # 姿勢のずれの基準点。source は inner_only に依存しないので sweep ごとに1回。
+        # 姿勢のずれの基準点。**取り方で分類が変わる**ので切り替え可能にし、
+        # どちらを使ったかを出力に残す（`classify` の表を参照）。
         cfg["reference"] = dict(cfg["reference"], inner_only=bool(inner))
-        p0 = io_utils.load_source_cloud(cfg).points.mean(axis=0)
+        if args.p0 == "gt_mesh":
+            import open3d as o3d
+            scene = os.path.basename(blob["config"]).rsplit("__", 1)[0]
+            mesh = o3d.io.read_triangle_mesh(
+                "output/GT_alignment/source/%s.ply" % scene)
+            p0 = np.asarray(mesh.vertices).mean(axis=0)
+        else:
+            p0 = io_utils.load_source_cloud(cfg).points.mean(axis=0)
         for mode in sorted({r["mode"] for r in blob["rows"]}):
             rows = [r for r in blob["rows"] if r["mode"] == mode]
             cls = [classify(r, G, args.rot_tol, args.basin, p0) for r in rows]
@@ -169,7 +192,7 @@ def main() -> int:
                                      for c, r in zip(cls, rows)]})
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:
-        json.dump({"provenance": provenance(), "rows": out},
+        json.dump({"provenance": provenance(), "p0": args.p0, "rows": out},
                   f, indent=2, ensure_ascii=False)
     print("wrote %s" % args.out)
     return 0
