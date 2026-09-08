@@ -140,7 +140,54 @@ both.
 
 ## Status
 
-The implementation is complete and the default is verified unchanged. Whether to
-adopt `plane_match` is not decided here: on this evidence the binding constraint
-is the search reaching the correct pose, not the objective ranking it. The reference
-transform outscores everything the method returns.
+The implementation is complete and the default is verified unchanged.
+
+**`plane_match` is on hold, not rejected.** An earlier version of this section said the
+binding constraint is the search reaching the correct pose rather than the objective
+ranking it. The failure decomposition (160 runs = 2 scenes × 2 reference definitions ×
+2 modes × 20 seeds) shows that is not the whole picture for `plane_match`:
+
+| translation init | correct candidate's post-ICP reference-point displacement | failure class |
+|---|---:|---|
+| `centroid` | 8.4–13.4 m | (ii) not converged |
+| **`plane_match`** | **0.91–1.44 m** | **(iii) lost on score** |
+
+So `plane_match` **improves the convergence stage and loses the gain at the ranking
+stage.** The correct candidate is generated in 160/160 runs (rotation error 0.14–1.65°)
+and, with `plane_match`, converges to within about a metre — then loses the argmax to a
+wrong candidate.
+
+**The accurate statement is: `plane_match` moves the failure from stage (ii) to stage
+(iii). It does not make the final answer correct, and cannot until the ranking stage is
+fixed.** Calling it "does not work" was wrong. `vertical_only` is a different case and
+should not be described the same way — that one did not help at any stage.
+
+Two caveats on the classification. The median 0.91 m sits just inside the 1.0 m basin
+criterion; sweeping that threshold over 0.5–3.0 m puts the (ii)→(iii) switch in the
+1.0–1.5 m band only, so the class is not an artefact of one threshold, but it is close
+to the boundary. And the reference point used to measure displacement matters: the
+source-cloud centroid gives 0.910 m and 33 runs in (iii), while the GT-alignment mesh
+centroid gives 0.970 m and 18. Both are reference-point displacements; they disagree
+because the value sits near the boundary (`failure_decomposition.py --p0`).
+
+### The reference-side term does not fix the ranking
+
+The 0.664 / 0.071 and 0.690 / 0.500 figures in the table above come from a **different
+measurement run** than the score-inversion cases, and are not the reference-side
+coverage of the high-scoring wrong answers that lose on rank.
+
+Re-scoring every saved candidate (960 of them) under one fixed denominator settles it.
+Ranking by the reference-side explained ratio alone puts the correct candidate **first
+in 0 of 33** (iii) runs — it lands 5th–7th of 8. A representative case: the correct
+candidate scores 0.1245 source-side and 0.2431 reference-side, while the winner, rotated
+**179.6°** and 9.7 m away, scores **0.1877 and 0.3507**. Products and minima of the two
+ratios do no better.
+
+The reason is visible in the scatter: the two ratios are strongly correlated and lie on a
+diagonal band, so the reference side carries little information the source side does not
+already have. A corridor rotated 180° still explains the reference, and slightly better.
+The one thing off that band is a scale-collapsed solution, where the reference-side ratio
+drops to 0.045–0.067× the healthy control while the source-side ratio rises 6.7–9.2×.
+
+**A reference-side term would guard against scale collapse. It does not separate the
+180° flip, which is what actually loses these runs.**
