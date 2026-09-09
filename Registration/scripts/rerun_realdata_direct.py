@@ -49,51 +49,61 @@ def mode_of(deg: float) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--seed", type=int, default=0,
-                    help="点サンプリングの seed。既定 0 で固定し、再現可能にする")
+    ap.add_argument("--seeds", type=int, nargs="+", default=[0],
+                    help="点サンプリングの seed。複数指定で分布が出る")
     ap.add_argument("--out", default="Registration/output/diag/realdata_direct_v2.json")
     args = ap.parse_args()
 
     stored = {("%s__%s" % (r["scene"], r["condition"])): r
               for r in json.load(open("Registration/output/realdata/realdata_results.json"))}
     cfgs = sorted(glob.glob("Registration/configs/realdata/*.yaml"))
-    print("%d 条件。点サンプリング seed=%d 固定。" % (len(cfgs), args.seed))
-    print("%-16s %8s %9s %8s  %-6s | 保存済み(両面参照)" % (
-        "target", "回転", "並進", "縮尺比", "モード"))
+    print("%d 条件 × seed %s = %d 実行。"
+          % (len(cfgs), args.seeds, len(cfgs) * len(args.seeds)))
+    print("%-16s %-5s %8s %9s %8s  %-6s | 保存済み(両面参照)" % (
+        "target", "seed", "回転", "並進", "縮尺比", "モード"))
 
     out = []
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     for path in cfgs:
         name = os.path.basename(path)[:-5]
-        cfg = yaml.safe_load(open(path))
-        cfg["source"] = dict(cfg["source"], seed=args.seed)
-        G = np.asarray(json.load(open(cfg["eval"]["t_gt_path"]))["T_gt"], dtype=np.float64)
-        t0 = time.time()
-        T = get_method("proposed").register(io_utils.load_source_cloud(cfg),
-                                            io_utils.load_reference_cloud(cfg), cfg)
-        e = metrics.sim3_errors(T, G)
-        succ = cfg["eval"]["success"]
-        ok = (not e["degenerate"] and e["rot_deg"] < succ["rot_deg"]
-              and e["trans"] < succ["trans"] and e["scale_ratio"] < succ["scale_ratio"])
-        s0 = stored.get(name)
-        rec = {"target": name, "scene": name.split("__")[0],
-               "condition": name.split("__")[1],
-               "rot_deg": e["rot_deg"], "trans": e["trans"],
-               "scale_ratio": e["scale_ratio"], "degenerate": bool(e["degenerate"]),
-               "mode": mode_of(e["rot_deg"]), "success": bool(ok),
-               "time_s": round(time.time() - t0, 1),
-               "stored": s0 and {k: s0[k] for k in
-                                 ("direct_rot_deg", "direct_trans", "direct_scale_ratio")}}
-        out.append(rec)
-        print("%-16s %7.2f度 %8.3fm %8.4f  %-6s | %s%s"
-              % (name, e["rot_deg"], e["trans"], e["scale_ratio"], rec["mode"],
-                 ("%.2f度 %.3fm %.4f" % (s0["direct_rot_deg"], s0["direct_trans"],
-                                         s0["direct_scale_ratio"])) if s0 else "—",
-                 "   **成功**" if ok else ""), flush=True)
-        # 1 件ごとに書き出す
-        with open(args.out, "w") as f:
-            json.dump({"provenance": provenance(), "seed": args.seed,
-                       "results": out}, f, indent=2, ensure_ascii=False)
+        base = yaml.safe_load(open(path))
+        G = np.asarray(json.load(open(base["eval"]["t_gt_path"]))["T_gt"],
+                       dtype=np.float64)
+        dst = io_utils.load_reference_cloud(base)      # seed に依存しない
+        for sd in args.seeds:
+            cfg = dict(base, source=dict(base["source"], seed=sd))
+            t0 = time.time()
+            T = get_method("proposed").register(io_utils.load_source_cloud(cfg), dst, cfg)
+            e = metrics.sim3_errors(T, G)
+            succ = cfg["eval"]["success"]
+            ok = (not e["degenerate"] and e["rot_deg"] < succ["rot_deg"]
+                  and e["trans"] < succ["trans"]
+                  and e["scale_ratio"] < succ["scale_ratio"])
+            s0 = stored.get(name)
+            rec = {"target": name, "scene": name.split("__")[0],
+                   "condition": name.split("__")[1], "seed": sd,
+                   # R7 §3-2：**行列を残す。** 指標の定義を変えても再実行せずに
+                   # 測り直せる。前回これを省いたので、6基準判定のために
+                   # 40 条件を回し直すはめになった。
+                   "T_est": np.asarray(T, dtype=np.float64).tolist(),
+                   "rot_deg": e["rot_deg"], "trans": e["trans"],
+                   "scale_ratio": e["scale_ratio"],
+                   "degenerate": bool(e["degenerate"]),
+                   "mode": mode_of(e["rot_deg"]), "success": bool(ok),
+                   "time_s": round(time.time() - t0, 1),
+                   "stored": s0 and {k: s0[k] for k in
+                                     ("direct_rot_deg", "direct_trans",
+                                      "direct_scale_ratio")}}
+            out.append(rec)
+            print("%-16s %-5d %7.2f度 %8.3fm %8.4f  %-6s | %s%s"
+                  % (name, sd, e["rot_deg"], e["trans"], e["scale_ratio"], rec["mode"],
+                     ("%.2f度 %.3fm %.4f" % (s0["direct_rot_deg"], s0["direct_trans"],
+                                             s0["direct_scale_ratio"])) if s0 else "—",
+                     "   **成功**" if ok else ""), flush=True)
+            # 1 件ごとに書き出す
+            with open(args.out, "w") as f:
+                json.dump({"provenance": provenance(), "seeds": args.seeds,
+                           "results": out}, f, indent=2, ensure_ascii=False)
 
     n_ok = sum(r["success"] for r in out)
     print("\n**成功（回転<%.1f度・並進<%.2fm・縮尺比<%.2f）: %d / %d**"
