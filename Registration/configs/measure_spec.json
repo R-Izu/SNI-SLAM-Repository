@@ -1,0 +1,50 @@
+{
+  "_note": "R24 §1-1 の測定指定。本人が現地で測って戻ってきたら measured_m を埋めるだけで、face_distance.py がそのまま流れる。",
+  "_how_to_record": [
+    "室（411 / 410）",
+    "2つの面（クラスと『測定位置から見てどちら側にあるか』。例：床は -z、天井は +z、向かい合う壁は +y と -y）",
+    "測定位置 at（BIM 座標 [x, y, z]。分からなければ『東端から 1 m、床から 1.2 m』で伝えてもらえば、こちらで座標に直す）",
+    "実測値 measured_m [m]",
+    "器具（レーザー距離計 / コンベックス 等）",
+    "写真のファイル名"
+  ],
+  "_caution": "測定位置ごとに 1 行にする。**平均に潰さない**。天井が水平でない可能性があるので、室全体で1つの値にしない（R24 §1-2）。",
+  "measurements": [
+    {
+      "id": "411_height_west",
+      "scene": "m3_block_b",
+      "config": "Registration/configs/realdata/m3_block_b__E2.yaml",
+      "face_a": {"class": "floor", "normal": "-z"},
+      "face_b": {"class": "ceiling", "normal": "+z"},
+      "at": [-10.0, 0.0, 1.2],
+      "radius": 1.0,
+      "measured_m": null,
+      "instrument": null,
+      "photo": null
+    },
+    {
+      "id": "411_height_east",
+      "scene": "m3_block_b",
+      "config": "Registration/configs/realdata/m3_block_b__E2.yaml",
+      "face_a": {"class": "floor", "normal": "-z"},
+      "face_b": {"class": "ceiling", "normal": "+z"},
+      "at": [2.0, 0.0, 1.2],
+      "radius": 1.0,
+      "measured_m": null,
+      "instrument": null,
+      "photo": null
+    },
+    {
+      "id": "411_width_mid",
+      "scene": "m3_block_b",
+      "config": "Registration/configs/realdata/m3_block_b__E2.yaml",
+      "face_a": {"class": "wall", "normal": "+y"},
+      "face_b": {"class": "wall", "normal": "-y"},
+      "at": [-5.0, 0.0, 1.2],
+      "radius": 4.0,
+      "measured_m": null,
+      "instrument": null,
+      "photo": null
+    }
+  ]
+}
