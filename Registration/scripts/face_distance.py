@@ -96,13 +96,24 @@ def fit_plane(pts: np.ndarray, axis: int, sign: float, at_axis: float,
 
 
 def select(pts: np.ndarray, labels: np.ndarray, face: Dict,
-           at: np.ndarray, radius: float, axis: int):
-    """クラスと測定位置で点を絞る。**位置を無視して室全体を使わない。**
+           at: np.ndarray, radius: float, axis: int,
+           normals: Optional[np.ndarray] = None, cos_min: float = 0.8):
+    """クラス・面の向き・測定位置で点を絞る。**位置を無視して室全体を使わない。**
 
     ★ 半径は**面に平行な方向だけ**に当てる。3D 距離で絞ると、床から 1.2 m の位置に
       半径 1 m を当てたとき**天井（1.9 m 上）が丸ごと落ちる**（最初の実装がこれだった）。
+
+    ★ **面の法線で絞る。** ある軸上の距離を定めうるのは、**法線がその軸を向いた面だけ**である。
+      南北に伸びる壁は y 方向に点が連続して並ぶので、法線で絞らないと
+      **その壁の任意の断面を「y 座標の面」として拾ってしまう**。
+      実際それが起きた：壁間 10.17 m の測定に対し、1.03 m という値を返していた。
+      **この修正は実測値を見て合わせたものではない**——
+      「法線がその軸を向いていない面は、その軸上の距離を定義しない」という定義から出る。
     """
     m = labels == NAME_TO_ID[face["class"]]
+    if normals is not None:
+        nrm = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12)
+        m &= np.abs(nrm[:, axis]) > cos_min
     if radius and radius > 0:
         other = [i for i in range(3) if i != axis]
         m &= np.linalg.norm(pts[:, other] - at[other][None, :], axis=1) < radius
@@ -122,6 +133,8 @@ def measure(spec: Dict) -> Dict:
         gt_kit, "T_gt", "T_gt_%s.json" % spec["scene"])))["T_gt"],
         dtype=np.float64).reshape(4, 4)
     src_pts = metrics.apply_sim3(G, src.points)      # BIM 座標へ
+    R_gt = metrics.decompose_sim3(G)[0]
+    src_nrm = None if src.normals is None else (np.asarray(src.normals) @ R_gt.T)
 
     out: Dict = {"id": spec["id"], "config": spec["config"], "gt_kit": gt_kit,
                  "at": spec["at"], "radius_m": rad,
@@ -130,9 +143,9 @@ def measure(spec: Dict) -> Dict:
                  "reference_inner_only": cfg["reference"].get("inner_only")}
     for side, face in (("a", spec["face_a"]), ("b", spec["face_b"])):
         ax, sgn = AXES[face["normal"]]
-        for who, pts, labels in (("scan", src_pts, src.labels),
-                                 ("bim", dst.points, dst.labels)):
-            sel = select(pts, labels, face, at, rad, ax)
+        for who, pts, labels, nrm in (("scan", src_pts, src.labels, src_nrm),
+                                      ("bim", dst.points, dst.labels, dst.normals)):
+            sel = select(pts, labels, face, at, rad, ax, nrm)
             out["%s_%s" % (who, side)] = (fit_plane(sel, ax, sgn, float(at[ax]))
                                           or {"error": "点が足りない",
                                               "n_candidates": int(len(sel))})
