@@ -292,9 +292,17 @@ class Proposed(BaseRegistration):
                 key=lambda s: -class_inlier_ratio(src_score, dst_score, s[0], thresh)
             )[:max(keep, 1)]
 
+        # 段階ごとの姿勢を残す（R24 追補）。本人の目視から
+        # 「どこで位置合わせを誤るのか、段階を分けて見たい」という要望が出た。
+        # **`record_yaw` と同じオプトイン。既定では何も記録せず、挙動も変わらない。**
+        record_stages = bool((cfg.get("diagnostics") or {}).get("record_stages", False))
+        stage_seeds: List[List[List[float]]] = []
+
         cand_R: List[np.ndarray] = []
         for init_T, R in seeds:
             cand_R.append(R)
+            if record_stages:
+                stage_seeds.append(np.asarray(init_T, dtype=np.float64).tolist())
             # Each candidate gets its own tracer; only the winner's trajectory
             # is surfaced, so the reported curve is a single coherent ICP run.
             cand_tracer = Tracer(tracer.stride) if tracer is not None else None
@@ -347,6 +355,20 @@ class Proposed(BaseRegistration):
         _, win_T, win_trace = min(cand, key=lambda x: x[0])
         if tracer is not None and win_trace is not None:
             tracer.steps = win_trace.steps
+        if record_stages:
+            self.last_stage_diag = {
+                "seeds": stage_seeds,                       # 段階1：ICP 前の種
+                "after_icp": [np.asarray(t, dtype=np.float64).tolist()
+                              for t in cand_T] or None,     # 段階2（record_yaw 併用時）
+                "scores": [float(s) for s in cand_scores] or None,
+                "winner_plane_T": np.asarray(plane_T, dtype=np.float64).tolist(),
+                "refine_init_T": np.asarray(refine_T0, dtype=np.float64).tolist(),
+                "refine_T": np.asarray(refine_T, dtype=np.float64).tolist(),
+                "chamfer_plane": float(cand[0][0]),
+                "chamfer_refine": float(cand[1][0]),
+                "final_is_refine": bool(cand[1][0] < cand[0][0]),
+                "final_T": np.asarray(win_T, dtype=np.float64).tolist(),
+            }
         return win_T
 
     @staticmethod
