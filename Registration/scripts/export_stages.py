@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.join(REPO, "Registration"))
 sys.path.insert(0, os.path.join(REPO, "Registration", "scripts"))
 os.chdir(REPO)
 
+from criterion_verdict import build_omega, d_omega                 # noqa: E402
 from export_for_review import C_REF, C_SOURCE, sha256, write_ply   # noqa: E402
 from failure_decomposition import provenance                       # noqa: E402
 from regbim import io_utils, metrics                               # noqa: E402
@@ -47,9 +48,16 @@ def main() -> int:
     ap.add_argument("--target", default="m3_cor_c__E2")
     ap.add_argument("--gt-kit", default="output/GT_alignment_probe",
                     help="既定は新 GT。旧 GT で見るなら output/GT_alignment")
+    ap.add_argument("--scale-init", default=None,
+                    choices=["median_axes", "vertical_only"],
+                    help="R25 §4 の診断用に seed の縮尺の決め方を上書きする。"
+                         "**config は書き換えない。既定は config の値（median_axes）**")
+    ap.add_argument("--no-ply", action="store_true",
+                    help="点群を書かず数値だけ出す（複数条件を掃くとき）")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
-    out = args.out or os.path.join("output", "stages_%s" % args.target)
+    suffix = "" if args.scale_init is None else "__" + args.scale_init
+    out = args.out or os.path.join("output", "stages_%s%s" % (args.target, suffix))
     os.makedirs(out, exist_ok=True)
 
     scene = args.target.split("__")[0]
@@ -58,13 +66,16 @@ def main() -> int:
     cfg.setdefault("diagnostics", {})
     cfg["diagnostics"]["record_yaw"] = True
     cfg["diagnostics"]["record_stages"] = True
+    if args.scale_init is not None:
+        cfg.setdefault("proposed", {})["scale_init"] = args.scale_init
 
     src = io_utils.load_source_cloud(cfg)
     dst = io_utils.load_reference_cloud(cfg)
     G = np.asarray(json.load(open(os.path.join(
         args.gt_kit, "T_gt", "T_gt_%s.json" % scene)))["T_gt"],
         dtype=np.float64).reshape(4, 4)
-    RG = metrics.decompose_sim3(G)[0]
+    RG, _, S_GT = metrics.decompose_sim3(G)
+    omega = build_omega(cfg, seed=0)
 
     m = get_method("proposed")
     print("実行中… %s（GT: %s）" % (args.target, args.gt_kit), flush=True)
@@ -75,19 +86,33 @@ def main() -> int:
     files: List[Dict] = []
 
     def emit(name: str, T, note: str):
+        """1 段階ぶんを記録する。
+
+        **縮尺比** は |s_est / s_GT − 1|。**GT と同じ縮尺なら 0。**
+        **d_Ω** は固定評価点集合 Ω の RMS 変位（R17 §5）。
+        **並進ベクトルの差は使わない**（R10 §3-2 で禁じている）。
+        """
         T = np.asarray(T, dtype=np.float64)
-        rot = metrics.rotation_error_deg(metrics.decompose_sim3(T)[0], RG)
-        p = os.path.join(out, name + ".ply")
-        write_ply(p, metrics.apply_sim3(T, src.points),
-                  np.tile(C_SOURCE, (len(src), 1)))
+        R_e, _, s_e = metrics.decompose_sim3(T)
+        rot = metrics.rotation_error_deg(R_e, RG)
+        sr = abs(s_e / S_GT - 1.0)
+        dw = d_omega(T, G, omega)
+        if not args.no_ply:
+            write_ply(os.path.join(out, name + ".ply"),
+                      metrics.apply_sim3(T, src.points),
+                      np.tile(C_SOURCE, (len(src), 1)))
         files.append({"file": name + ".ply", "stage": note,
                       "gt_rot_deg": round(rot, 2),
+                      "scale_ratio": round(sr, 4),
+                      "d_omega_m": round(dw, 3),
                       "T": T.tolist()})
-        print("  %-34s GT からの回転 %7.2f 度   %s" % (name, rot, note))
+        print("  %-32s 回転 %7.2f 度 / 縮尺比 %7.4f / d_Ω %9.3f m   %s"
+              % (name, rot, sr, dw, note))
 
     # 参照と GT
-    write_ply(os.path.join(out, "00_bim_reference.ply"), dst.points,
-              np.tile(C_REF, (len(dst), 1)))
+    if not args.no_ply:
+        write_ply(os.path.join(out, "00_bim_reference.ply"), dst.points,
+                  np.tile(C_REF, (len(dst), 1)))
     files.append({"file": "00_bim_reference.ply", "stage": "BIM 参照（変換なし）"})
     emit("01_gt", G, "GT の解（正解）")
 
@@ -108,6 +133,9 @@ def main() -> int:
             "再初期化" if st["final_is_refine"] else "勝者"))
 
     meta = {"provenance": provenance(), "target": args.target, "gt_kit": args.gt_kit,
+            "scale_init": cfg.get("proposed", {}).get("scale_init", "median_axes"),
+            "scale_init_overridden": args.scale_init is not None,
+            "s_gt": S_GT, "omega_n": int(len(omega)),
             "source_mesh": cfg["source"]["mesh_path"],
             "source_sha256_16": sha256(cfg["source"]["mesh_path"]),
             "source_seed": 0,

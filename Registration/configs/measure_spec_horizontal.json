@@ -1,0 +1,76 @@
+{
+  "_note": "R25 §5 の水平測定。現地で測って戻ったら measured_m を埋めるだけで face_distance.py が流れる。",
+  "_plan": "測る位置は 00_Coordination/Reports/figs/measure_plan_411_horizontal.png を見ること。H1〜H4 が図の青い矢印に対応する。",
+  "_why": "鉛直（室内高）の s_sensor は 0.99636〜1.00054 と切れた。**水平がまだ無い。** これが無いと AR 重畳の誤差収支が閉じない。",
+  "_how_chosen": "スキャン側で「向かい合う2面それぞれに 300 点以上」を満たす位置を先に全探索し、方向ごとに長い順で採った。R24 の W1 は北の壁に 26 点しか無く測れなかった。その失敗の再発を防ぐための手順である。",
+  "_room_411": "L字。南側の帯（図の y<0）だけが東西に 18 m 通っている。北側は 11.5 m。図の上側（y=+5.8 付近）に扉が2つあり、これが現地の目印になる。",
+  "_expected_values_withheld": "L_scan / L_bim の予想値は**わざとここに書いていない**。測る人が数値を知っていると、そこへ寄せてしまうため。値は報告 2026-09-14_r25_scale_mechanism.md §5 にある。",
+  "_how_to_record": [
+    "H番号（図の矢印）",
+    "実測値 measured_m [m]",
+    "器具（レーザー距離計 / コンベックス 等）。**H1・H2・H3 は 10〜18 m あるのでレーザー距離計が要る**",
+    "写真のファイル名",
+    "測った面が図と違う場合、または什器で測れずに位置をずらした場合は、その旨と実際の位置を書く"
+  ],
+  "_caution": "位置ごとに1行。平均に潰さない。**測るのは壁の仕上げ面どうし**（幅木や配線モールの出っ張りではなく壁面）。",
+  "_priority": "H4（3.8 m）はメジャーで測れるので**必ず1つは取れる**。H1（18 m）は最も相対誤差が小さいので**取れるなら最優先**。",
+  "measurements": [
+    {
+      "id": "H1_411_width_ew",
+      "_where": "図の H1。南側の帯を東西にまたぐ。南の壁から 2.0 m 北・西の壁から 1.5 m 東の位置で、東西の壁面どうし",
+      "_instrument": "18 m あるのでレーザー距離計。メジャーでは難しい",
+      "scene": "m3_block_b",
+      "config": "Registration/configs/realdata/m3_block_b__E2.yaml",
+      "face_a": {"class": "wall", "normal": "+x"},
+      "face_b": {"class": "wall", "normal": "-x"},
+      "at": [-12.16, -2.52, 1.2],
+      "radius": 1.5,
+      "measured_m": null,
+      "instrument": null,
+      "photo": null
+    },
+    {
+      "id": "H2_411_width_ew",
+      "_where": "図の H2。北側の帯を東西にまたぐ。扉のある北壁から 2.8 m 南・L字の内側の角のすぐ東",
+      "_instrument": "11.5 m。レーザー距離計",
+      "scene": "m3_block_b",
+      "config": "Registration/configs/realdata/m3_block_b__E2.yaml",
+      "face_a": {"class": "wall", "normal": "+x"},
+      "face_b": {"class": "wall", "normal": "-x"},
+      "at": [-6.66, 2.98, 1.2],
+      "radius": 1.5,
+      "measured_m": null,
+      "instrument": null,
+      "photo": null
+    },
+    {
+      "id": "H3_411_width_ns",
+      "_where": "図の H3。室の南北を貫く。西の壁から 9.0 m 東の位置で、南の壁面と北の壁面のあいだ",
+      "_instrument": "10 m。レーザー距離計",
+      "_note": "R24 の W1 と同じ向きだが**位置が違う**。W1 の位置ではスキャンが北の壁に届いていなかった",
+      "scene": "m3_block_b",
+      "config": "Registration/configs/realdata/m3_block_b__E2.yaml",
+      "face_a": {"class": "wall", "normal": "+y"},
+      "face_b": {"class": "wall", "normal": "-y"},
+      "at": [-4.66, -2.02, 1.2],
+      "radius": 1.5,
+      "measured_m": null,
+      "instrument": null,
+      "photo": null
+    },
+    {
+      "id": "H4_411_width_ns",
+      "_where": "図の H4。L字の短い方（西の張り出し）の南北。西の壁から 0.5 m 東・南の壁から 0.5 m 北の位置",
+      "_instrument": "3.8 m。**メジャーで測れる**",
+      "scene": "m3_block_b",
+      "config": "Registration/configs/realdata/m3_block_b__E2.yaml",
+      "face_a": {"class": "wall", "normal": "+y"},
+      "face_b": {"class": "wall", "normal": "-y"},
+      "at": [-13.16, -4.02, 1.2],
+      "radius": 1.5,
+      "measured_m": null,
+      "instrument": null,
+      "photo": null
+    }
+  ]
+}
