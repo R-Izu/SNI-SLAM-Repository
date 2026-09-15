@@ -24,10 +24,18 @@ from .labels import (
 
 
 def load_source_cloud(cfg: Dict) -> LabeledCloud:
-    """Dispatch on ``cfg['source']['type']``. Currently only ``slam_mesh``."""
+    """Dispatch on ``cfg['source']['type']``: ``slam_mesh`` or ``points_ply``.
+
+    ``points_ply`` was added for the GT-A benchmark (R27 §2-2), whose source is a
+    point cloud built by reprojecting GT depth rather than a reconstructed mesh.
+    It is a new branch only: ``slam_mesh`` is untouched, so every existing config
+    loads exactly as before.
+    """
     spec = cfg["source"]
     if spec["type"] == "slam_mesh":
         return _load_slam_mesh(spec)
+    if spec["type"] == "points_ply":
+        return _load_points_ply(spec)
     raise ValueError(f"unknown source type: {spec['type']}")
 
 
@@ -98,6 +106,31 @@ def _load_slam_mesh(spec: Dict) -> LabeledCloud:
     return LabeledCloud(points=points, labels=labels, normals=normals,
                         meta={"source": "slam_mesh", "path": spec["mesh_path"],
                               "sample_seed": int(spec.get("seed", -1))})
+
+
+def _load_points_ply(spec: Dict) -> LabeledCloud:
+    """Load an already-built labelled point cloud (colours encode the 6 classes).
+
+    Used by the GT-A benchmark, where the source is reprojected GT depth. Unlike
+    ``slam_mesh`` there is nothing to sample, so ``seed`` and ``n_points`` do not
+    apply: the file holds exactly the points that were written. Passing either is
+    an error rather than a silent no-op, so a config copied from a ``slam_mesh``
+    one cannot quietly claim a determinism it does not have.
+    """
+    for k in ("seed", "n_points"):
+        if k in spec:
+            raise ValueError(
+                f"source.{k} is meaningless for points_ply (nothing is sampled); "
+                "the file already holds the exact points")
+    pcd = o3d.io.read_point_cloud(spec["mesh_path"])
+    if not pcd.has_colors():
+        raise ValueError(f"points_ply has no colours to decode labels from: "
+                         f"{spec['mesh_path']}")
+    points = np.asarray(pcd.points)
+    labels = color_to_label(np.asarray(pcd.colors))
+    normals = np.asarray(pcd.normals) if pcd.has_normals() else None
+    return LabeledCloud(points=points, labels=labels, normals=normals,
+                        meta={"source": "points_ply", "path": spec["mesh_path"]})
 
 
 # --------------------------------------------------------------------------- #
