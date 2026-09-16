@@ -77,9 +77,26 @@ def scale_error_ratio(s_a: float, s_b: float) -> float:
 
 
 def sim3_errors(T_est: np.ndarray, T_gt: np.ndarray) -> Dict[str, float]:
+    # A method returning a non-finite transform is a failed trial, not a reason
+    # to stop evaluating. Before this guard, `baseline_open3d` on Replica room_1
+    # returned a matrix with NaNs, `decompose_sim3` raised LinAlgError("SVD did
+    # not converge"), and the whole benchmark process died -- losing all eight
+    # methods for that scene, because the summary is only written once a scene
+    # finishes. Record it the way a collapsed transform is recorded and let
+    # stats.check_success veto it.
+    #
+    # The errors are +inf rather than NaN: NaN would poison the medians the
+    # aggregate takes, while +inf says honestly "arbitrarily wrong" and orders
+    # correctly. Finite inputs never reach this branch, so every number produced
+    # before this guard is reproduced bit-for-bit.
+    if not (np.isfinite(T_est).all() and np.isfinite(T_gt).all()):
+        inf = float("inf")
+        return {"rot_deg": inf, "trans": inf, "scale_ratio": inf,
+                "degenerate": True, "non_finite": True}
     Re, te, se = decompose_sim3(T_est)
     Rg, tg, sg = decompose_sim3(T_gt)
     return {
+        "non_finite": False,
         "rot_deg": rotation_error_deg(Re, Rg),
         "trans": translation_error(te, tg),
         "scale_ratio": scale_error_ratio(se, sg),

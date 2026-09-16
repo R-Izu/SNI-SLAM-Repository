@@ -85,6 +85,32 @@ def main() -> int:
     check("s=1e-5 は潰れ扱い",
           metrics.is_degenerate_sim3(sim3(Q, np.zeros(3), 1e-5)))
 
+    print("5. 非有限な解は例外を投げずに失敗として記録される（R27）")
+    # Replica room_1 で baseline_open3d が NaN を含む変換を返し、decompose_sim3 の
+    # SVD が例外を投げて benchmark プロセスごと落ちた。summary はシーンの最後に
+    # 書くので、**そのシーンの 8 手法すべてが失われた**。手法が非有限を返すのは
+    # 失敗であって、評価を止める理由ではない。
+    nan_T = sim3(Q, np.array([1.0, 2.0, 3.0]), 0.83)
+    nan_T[0, 0] = np.nan
+    inf_T = sim3(Q, np.array([1.0, 2.0, 3.0]), 0.83)
+    inf_T[1, 3] = np.inf
+    for name, bad in (("NaN", nan_T), ("Inf", inf_T)):
+        try:
+            e_bad = metrics.sim3_errors(bad, good)
+        except Exception as ex:                       # noqa: BLE001
+            check("%s を渡しても例外を投げない" % name, False,
+                  "%s: %s" % (type(ex).__name__, ex))
+            continue
+        check("%s を渡しても例外を投げない" % name, True)
+        check("%s は non_finite が立つ" % name, e_bad.get("non_finite") is True)
+        check("%s は degenerate 扱い" % name, e_bad["degenerate"] is True)
+        check("%s は成功と判定されない" % name,
+              stats.check_success(e_bad, THRESHOLDS) is False)
+        check("%s の誤差は inf（NaN ではない。中央値を汚さない）" % name,
+              all(e_bad[k] == float("inf")
+                  for k in ("rot_deg", "trans", "scale_ratio")))
+    check("正常な解には non_finite が立たない", e_ok.get("non_finite") is False)
+
     print()
     if FAILS:
         print("FAILED: %s" % ", ".join(FAILS))
