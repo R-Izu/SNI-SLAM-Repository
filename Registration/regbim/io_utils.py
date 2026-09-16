@@ -177,12 +177,32 @@ def _load_replica_reference(spec: Dict, classes_cfg: Dict) -> LabeledCloud:
 
     tm = trimesh.Trimesh(vertices=vertices, faces=tris, process=False)
     n_points = int(spec["n_points"])
-    samples, face_index = trimesh.sample.sample_surface(tm, n_points)
+    # R30 §4: this sampling was unseeded, so the reference changed on every load --
+    # two reads put the same index 4.27 m apart, and no Replica result was ever
+    # bit-reproducible. Measured first (R30 §4 step 1): across 10 runs varying only
+    # the reference sample, the success rate did not move at all and the median
+    # d_omega spanned 0.00109 m, so the effect is real but ~1% of the 0.1 m
+    # threshold. trimesh 3.10.7's sample_surface takes no seed argument, so seed
+    # numpy's global RNG around the call and restore the state afterwards -- this
+    # keeps the seeding local instead of leaking into whatever runs next.
+    # `seed` absent or -1 keeps the previous non-deterministic behaviour, matching
+    # the `slam_mesh` convention, so existing configs are unaffected.
+    seed = int(spec.get("seed", -1))
+    if seed >= 0:
+        state = np.random.get_state()
+        np.random.seed(seed)
+        try:
+            samples, face_index = trimesh.sample.sample_surface(tm, n_points)
+        finally:
+            np.random.set_state(state)
+    else:
+        samples, face_index = trimesh.sample.sample_surface(tm, n_points)
     labels = face_six_k[face_index]
     normals = tm.face_normals[face_index]
     return LabeledCloud(points=np.asarray(samples), labels=labels,
                         normals=np.asarray(normals),
-                        meta={"source": "replica_gt", "path": spec["mesh_path"]})
+                        meta={"source": "replica_gt", "path": spec["mesh_path"],
+                              "sample_seed": seed})
 
 
 # --------------------------------------------------------------------------- #
