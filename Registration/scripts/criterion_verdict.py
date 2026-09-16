@@ -51,8 +51,17 @@ OMEGA_N = 20000            # Ω の点数。固定して保存する
 
 
 def build_omega(cfg: Dict, seed: int = 0) -> np.ndarray:
-    """seed 0 の source から構造点を固定抽出する（R17 §5）。"""
-    c = dict(cfg, source=dict(cfg["source"], seed=seed))
+    """seed 0 の source から構造点を固定抽出する（R17 §5）。
+
+    ★ `seed` を渡すのは**標本化する source だけ**である。`points_ply`（GT-A）は
+      ファイルの点をそのまま読むので標本化がなく、`seed` を渡すと
+      `io_utils._load_points_ply` が例外で止める。**その番人は正しいので弱めない。**
+      呼ぶ側で、標本化する型にだけ渡す。**既存の `slam_mesh` の挙動は変わらない。**
+    """
+    spec = dict(cfg["source"])
+    if spec.get("type") == "slam_mesh":
+        spec["seed"] = seed
+    c = dict(cfg, source=spec)
     src = io_utils.load_source_cloud(c)
     ids = {NAME_TO_ID[n] for n in OMEGA_CLASSES if n in NAME_TO_ID}
     m = np.isin(src.labels, list(ids))

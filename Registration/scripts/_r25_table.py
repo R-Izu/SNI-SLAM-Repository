@@ -12,7 +12,7 @@ import re
 os.chdir("/home/student/rizu/SNI-SLAM")
 
 print("%-14s %-14s | %8s %8s %8s | %8s %8s | %s"
-      % ("条件", "scale_init", "正解候補", "S1 種", "S2 ICP後", "ICP の移動", "最終", "最終の回転"))
+      % ("条件", "scale_init", "正解候補", "S1 種", "S2 ICP後", "GT誤差の変化", "最終", "最終の回転"))
 print("%-14s %-14s | %8s %8s %8s | %8s %8s | %s"
       % ("", "", "の回転", "d_Ω[m]", "d_Ω[m]", "[m]", "d_Ω[m]", "[度]"))
 print("-" * 104)
