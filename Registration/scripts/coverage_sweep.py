@@ -66,12 +66,56 @@ def struct_pts(cloud) -> np.ndarray:
     return cloud.points[np.isin(cloud.labels, ids)]
 
 
-def measure(cfg: Dict, keep_frac: float, anchor, omega, G) -> Dict:
-    """1 つの被覆率について、機構の各段を測る。**摂動は掛けない**（機構を見るため）。"""
+def correspondence_stats(src, dst, T, max_corr: float, tukey_c: float) -> Dict:
+    """最終姿勢での対応の量を数える（R31 §3-4）。
+
+    **半径を広げれば破綻点も広がる、で終わらせないための量である。**
+    広い半径は誤った対応も増やす（R29 の外部レビュー §2-5）ので、
+    **有効対応数と重みの総和を併記して、「何を代償に広がったか」を見る。**
+
+    ICP の内部を変えずに、外から同じ規則で数え直している
+    （`semantic_icp` の対応づけと同じ：クラスごとの最近傍・半径で足切り・Tukey 重み）。
+    """
+    from scipy.spatial import cKDTree
+    moved = metrics.apply_sim3(T, src.points)
+    common = set(np.unique(src.labels)) & set(np.unique(dst.labels))
+    n_pos = n_in = 0
+    w_sum = 0.0
+    for c in common:
+        sm, dm = src.labels == c, dst.labels == c
+        if sm.sum() == 0 or dm.sum() == 0:
+            continue
+        dist, _ = cKDTree(dst.points[dm]).query(moved[sm], k=1, workers=-1)
+        keep = dist < max_corr
+        n_in += int(keep.sum())
+        if keep.any():
+            w = (1.0 - (dist[keep] / tukey_c) ** 2) ** 2      # Tukey biweight
+            w = np.clip(w, 0.0, None)
+            n_pos += int((w > 0).sum())
+            w_sum += float(w.sum())
+    return {"n_src": int(len(src)), "n_corr_within_radius": n_in,
+            "n_corr_positive_weight": n_pos, "weight_sum": round(w_sum, 2),
+            "frac_src_matched": round(n_in / max(len(src), 1), 4)}
+
+
+def measure(cfg: Dict, keep_frac: float, anchor, omega, G,
+            max_corr_dist=None) -> Dict:
+    """1 つの被覆率について、機構の各段を測る。**摂動は掛けない**（機構を見るため）。
+
+    `max_corr_dist` は R31 §3 の探索半径の掃引用。**config は書き換えず、
+    ここでだけ上書きする。** None なら config の値（既定 0.30 m）のまま。
+    """
     c = copy.deepcopy(cfg)
     if keep_frac < 1.0:
         c["reference"] = dict(c["reference"], clip={"keep_frac": keep_frac,
                                                     "anchor": list(anchor)})
+    if max_corr_dist is not None:
+        # R31 §3：対応点の探索半径が破綻点を決めているかを見る。
+        # Tukey の打切りは半径と同値に保つ（既定が max_corr_dist == tukey_c なので、
+        # 片方だけ動かすと「半径を変えた効果」と「重みの形を変えた効果」が混ざる）。
+        c["semantic_icp"] = dict(c["semantic_icp"],
+                                 max_corr_dist=float(max_corr_dist),
+                                 tukey_c=float(max_corr_dist))
     c.setdefault("diagnostics", {})
     c["diagnostics"]["record_yaw"] = True
     c["diagnostics"]["record_stages"] = True
@@ -110,7 +154,13 @@ def measure(cfg: Dict, keep_frac: float, anchor, omega, G) -> Dict:
     ok = (not e["degenerate"] and e["rot_deg"] < SUCC["rot_deg"]
           and final_d < SUCC["trans"] and e["scale_ratio"] < SUCC["scale_ratio"])
 
+    icfg = c["semantic_icp"]
+    corr = correspondence_stats(src, dst, T_final, float(icfg["max_corr_dist"]),
+                                float(icfg["tukey_c"]))
+
     return {"keep_frac_nominal": keep_frac, "anchor": list(anchor),
+            "max_corr_dist": float(icfg["max_corr_dist"]),
+            "correspondence": corr,
             "coverage_achieved": clip_meta.get("coverage_achieved", 1.0),
             "overlap_ratio": overlap,
             "centroid_diff_m": centroid_diff,
@@ -140,6 +190,8 @@ def main() -> int:
     ap.add_argument("--anchors", default="-1,-1;-1,1;1,-1;1,1",
                     help='切り取る箱を寄せる隅を ";" で連ねる。'
                          '**複数出して位置依存を見る**')
+    ap.add_argument("--max-corr-dist", type=float, default=None,
+                    help="R31 §3：対応点の探索半径を上書きする（config は変えない）")
     ap.add_argument("--out", default="Registration/output/diag/coverage_sweep.json")
     args = ap.parse_args()
 
@@ -160,7 +212,7 @@ def main() -> int:
         for a in anchors:
             anchor = [float(v) for v in a.split(",")]
             try:
-                r = measure(cfg, kf, anchor, omega, G)
+                r = measure(cfg, kf, anchor, omega, G, args.max_corr_dist)
             except Exception as ex:                     # 1 点落ちても続ける
                 r = {"keep_frac_nominal": kf, "anchor": anchor,
                      "error": "%s: %s" % (type(ex).__name__, ex)}
@@ -176,6 +228,9 @@ def main() -> int:
             with open(args.out, "w") as f:
                 json.dump({"provenance": provenance(), "scene": args.scene,
                            "success_thresholds": SUCC,
+                           "max_corr_dist": (args.max_corr_dist
+                                             if args.max_corr_dist is not None
+                                             else cfg["semantic_icp"]["max_corr_dist"]),
                            "note": "摂動なしの直接解。予測 Q1〜Q3 は R30 §3-3 に登録済み",
                            "rows": rows}, f, indent=2, ensure_ascii=False)
 
