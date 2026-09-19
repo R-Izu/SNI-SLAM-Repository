@@ -159,3 +159,184 @@ def horizontal_candidates(src_xy_x: np.ndarray, src_xy_y: np.ndarray,
         out.append({"shift_xy": shift.tolist(), "score": score,
                     "index": [int(i), int(j)]})
     return out
+
+
+# --------------------------------------------------------------------------- #
+# 鉛直位置：床どうし・天井どうしの高さを合わせる
+# --------------------------------------------------------------------------- #
+def vertical_candidates(src_z: Dict[str, np.ndarray], dst_z: Dict[str, np.ndarray],
+                        cell: float) -> List[Dict]:
+    """床どうし・天井どうしの一致から、鉛直位置の候補を作る。
+
+    **床と天井を取り違える対応は作らない**（R29 §1-2）。
+    同じクラスどうしだけを突き合わせるので、クラス名をキーに回す。
+
+    多層でも破綻しないよう、平均ではなく **1 次元の占有相関**で合わせる。
+    **候補が 1 つも作れない場合は空を返す**——GT や手入力で補わない（R29 §2-2）。
+    """
+    out: List[Dict] = []
+    for name in ("floor", "ceiling"):
+        s, d = src_z.get(name), dst_z.get(name)
+        if s is None or d is None or len(s) < 10 or len(d) < 10:
+            continue
+        o_s = np.floor(s.min() / cell) * cell
+        o_d = np.floor(d.min() / cell) * cell
+        gs = np.zeros(int(np.floor((s.max() - o_s) / cell)) + 1)
+        gd = np.zeros(int(np.floor((d.max() - o_d) / cell)) + 1)
+        gs[np.floor((s - o_s) / cell).astype(np.int64)] = 1.0
+        gd[np.floor((d - o_d) / cell).astype(np.int64)] = 1.0
+        c = correlate_full(gs[None, :], gd[None, :])[0]
+        k = int(np.argmax(c))
+        dz = (k - (len(gs) - 1)) * cell + (o_d - o_s)
+        out.append({"dz": float(dz), "score": float(c[k]), "from": name})
+    out.sort(key=lambda r: -r["score"])
+    return out
+
+
+def _dedup(cands: List[Dict], xy_tol: float, z_tol: float,
+           log_s_tol: float) -> List[Dict]:
+    """同じ山を1つにまとめる（R29 §2-1 の同一視の条件。**3つとも満たすとき同じ**）。"""
+    kept: List[Dict] = []
+    for c in cands:
+        dup = False
+        for k in kept:
+            if (np.linalg.norm(np.asarray(c["shift_xy"]) - np.asarray(k["shift_xy"])) < xy_tol
+                    and abs(c["dz"] - k["dz"]) < z_tol
+                    and abs(np.log(c["scale"]) - np.log(k["scale"])) < log_s_tol):
+                dup = True
+                break
+        if not dup:
+            kept.append(c)
+    return kept
+
+
+# R29 §2-1 の設定値。**測定前に固定したもの。結果を見てから変えない。**
+DEFAULTS = {
+    "cell_m": 0.25,              # 粗い画像のセル幅（参照座標）
+    "scale_lo": 0.3,             # 縮尺探索の下限
+    "scale_hi": 3.0,             # 上限
+    "scale_n": 59,               # 対数間隔の点数
+    "peak_sep_m": 0.5,           # 水平ピークの最小間隔
+    "n_peaks": 3,                # 水平ピークの数
+    "n_vertical": 2,             # 鉛直候補の数
+    "dedup_xy_m": 0.5,           # 同一視：水平位置差
+    "dedup_z_m": 0.25,           # 同一視：高さ差
+    "dedup_log_s": 0.04,         # 同一視：対数縮尺差
+    "max_points": 5000,          # source・参照それぞれの上限
+    "subsample_seed": 0,         # **全条件共通の固定 seed**
+    "per_yaw_coarse": 4,         # 各向きから短い精緻化へ渡す数
+    "wall_axis_tol_deg": WALL_AXIS_TOL_DEG,
+}
+
+
+def _subsample_mask(n: int, n_max: int, seed: int) -> np.ndarray:
+    """**全条件共通の固定 seed** で間引く添字を返す（R29 §2-1）。"""
+    if n <= n_max:
+        return np.arange(n)
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(n, n_max, replace=False))
+
+
+def _subsample_by_role(pts, labels, normals, n_max, seed, wall, floor, ceil):
+    """**役割ごとに** 5,000 点の枠を当てる（R29 §2-1 の「それぞれ最大 5,000 点」）。
+
+    ★ **最初の実装は全クラスまとめて 5,000 点に間引いていた。**
+      床と天井が点数の 6 割以上を占めるので、**水平相関を動かす壁がやせ細り、
+      占有格子に穴が空いた。** その結果、正解の縮尺 1.0 での一致が
+      108 セルから 41 セルまで落ち、**誤った縮尺 0.888 に負けた**
+      （間引きを外すと 1.0 が 108 対 68 で明確に勝つことを確認済み）。
+
+      **枠の大きさ（5,000）は R29 §2-1 のまま変えていない。**
+      変えたのは「何に対する 5,000 か」であり、R29 が定めていなかった点である。
+      水平相関を動かすのは壁だけ、鉛直を動かすのは床と天井だけなので、
+      **それぞれに枠を与える。**
+    """
+    idx = []
+    for cid in (wall, floor, ceil):
+        w = np.flatnonzero(labels == cid)
+        if len(w):
+            idx.append(w[_subsample_mask(len(w), n_max, seed)])
+    if not idx:
+        return pts[:0], labels[:0], (None if normals is None else normals[:0])
+    k = np.sort(np.concatenate(idx))
+    return pts[k], labels[k], (None if normals is None else normals[k])
+
+
+def generate_candidates(src_pts, src_labels, src_normals,
+                        dst_pts, dst_labels, dst_normals,
+                        rotations, name_to_id, cfg=None) -> Tuple[List[Dict], Dict]:
+    """案A の候補生成（R29 §1-2）。
+
+    **向きごとに枠を確保する**（`plane_match` は全向きを一括で絞ってしまう）。
+    返すのは ``(候補のリスト, 診断)``。候補には通し番号 ``cand_id`` が付く
+    （R29 §3：同じ変換を段階をまたいで追跡するため）。
+
+    **GT は一切受け取らない。** 探索は参照と source だけで閉じている。
+    """
+    p = dict(DEFAULTS, **(cfg or {}))
+    wall, floor, ceil = (name_to_id["wall"], name_to_id["floor"],
+                         name_to_id["ceiling"])
+
+    sp, sl, sn = _subsample_by_role(src_pts, src_labels, src_normals,
+                                    p["max_points"], p["subsample_seed"],
+                                    wall, floor, ceil)
+    dp, dl, dn = _subsample_by_role(dst_pts, dst_labels, dst_normals,
+                                    p["max_points"], p["subsample_seed"],
+                                    wall, floor, ceil)
+
+    d_wall_m = dl == wall
+    dx_xy, dy_xy = wall_groups(dp[d_wall_m], None if dn is None else dn[d_wall_m],
+                               p["wall_axis_tol_deg"])
+    dst_z = {"floor": dp[dl == floor][:, 2], "ceiling": dp[dl == ceil][:, 2]}
+
+    scales = np.exp(np.linspace(np.log(p["scale_lo"]), np.log(p["scale_hi"]),
+                                int(p["scale_n"])))
+    diag = {"n_scales": len(scales), "per_yaw": [],
+            "vertical_shortfall": 0, "n_raw": 0}
+    out: List[Dict] = []
+    cid = 0
+    for ri, R in enumerate(rotations):
+        rot_pts = sp @ np.asarray(R).T
+        rot_nrm = None if sn is None else sn @ np.asarray(R).T
+        w_m = sl == wall
+        per_yaw: List[Dict] = []
+        for s in scales:
+            sx, sy = wall_groups((rot_pts[w_m] * s),
+                                 None if rot_nrm is None else rot_nrm[w_m],
+                                 p["wall_axis_tol_deg"])
+            hs = horizontal_candidates(sx, sy, dx_xy, dy_xy, p["cell_m"],
+                                       int(p["n_peaks"]), p["peak_sep_m"])
+            if not hs:
+                continue
+            src_z = {"floor": rot_pts[sl == floor][:, 2] * s,
+                     "ceiling": rot_pts[sl == ceil][:, 2] * s}
+            vs = vertical_candidates(src_z, dst_z, p["cell_m"])[:int(p["n_vertical"])]
+            if not vs:
+                diag["vertical_shortfall"] += 1     # **補わない。数える**
+                continue
+            for h in hs:
+                for v in vs:
+                    per_yaw.append({"scale": float(s), "shift_xy": h["shift_xy"],
+                                    "dz": v["dz"], "score_h": h["score"],
+                                    "score_v": v["score"], "yaw_index": ri,
+                                    "vertical_from": v["from"]})
+        diag["n_raw"] += len(per_yaw)
+        # R29 §2-1 の並べ方：水平相関値 → 同点なら鉛直 → 同点なら固定した添字順
+        per_yaw = sorted(enumerate(per_yaw),
+                         key=lambda t: (-t[1]["score_h"], -t[1]["score_v"], t[0]))
+        per_yaw = [c for _, c in per_yaw]
+        per_yaw = _dedup(per_yaw, p["dedup_xy_m"], p["dedup_z_m"], p["dedup_log_s"])
+        kept = per_yaw[:int(p["per_yaw_coarse"])]
+        diag["per_yaw"].append({"yaw_index": ri, "n_after_dedup": len(per_yaw),
+                                "n_kept": len(kept)})
+        for c in kept:
+            s, R_ = c["scale"], np.asarray(R, dtype=np.float64)
+            # t = b - s R a + u。**中心どうしを対応点とみなしているのではない**
+            t = np.array([c["shift_xy"][0], c["shift_xy"][1], c["dz"]])
+            T = np.eye(4)
+            T[:3, :3] = s * R_
+            T[:3, 3] = t
+            out.append(dict(c, cand_id=cid, T=T))
+            cid += 1
+    diag["n_candidates"] = len(out)
+    return out, diag
