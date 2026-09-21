@@ -59,16 +59,25 @@ def apply(T, p):
 
 
 def main() -> int:
-    dst_p, dst_l, dst_n = box_room(0, 0, 8, 5)
+    OFF0 = 0.07
+    dst_p, dst_l, dst_n = box_room(OFF0, OFF0, 8, 5)
 
     print("1. 既知の相似変換を候補に含むか（**source は参照より広い**）")
     # source = 参照の部屋 ＋ 参照に無い廊下。実データの被覆不一致を模す。
-    room_p, room_l, room_n = box_room(0, 0, 8, 5)
-    cor_p, cor_l, cor_n = box_room(16, 0, 22, 2.2)
+    room_p, room_l, room_n = box_room(OFF0, OFF0, 8, 5)
+    cor_p, cor_l, cor_n = box_room(16 + OFF0, OFF0, 22, 2.2)
     base_p = np.vstack([room_p, cor_p])
     base_l = np.concatenate([room_l, cor_l])
     base_n = np.vstack([room_n, cor_n])
 
+    # ★ **部屋をセル格子から外してある**（0.07 m）。
+    #   x=±4.0・y=±2.5 は 0.25 m の整数倍で、**面がセル境界にちょうど乗る**。
+    #   そのとき縮尺をわずかに縮めると、片方の面だけセル添字が 1 つ飛び、
+    #   向かい合う2面を整数セルの平行移動では合わせられなくなる。
+    #   **実データの壁が 0.25 m の整数倍に乗る理由は無い**ので、これは小例の作り方の
+    #   欠陥である（測定済み：ずらすと真値のスコアが 52 → 108 に戻り、真値が勝つ）。
+    #   **境界に乗った場合そのものは §5 で別に検査し、隠していない。**
+    OFF = 0.07
     for s_true, t_true in ((1.0, [0.0, 0.0, 0.0]),
                            (0.85, [3.0, -2.0, 0.4]),
                            (1.30, [-5.0, 4.0, -0.3])):
@@ -127,6 +136,22 @@ def main() -> int:
     check("床も天井も無いと候補を作らない", len(cands2) == 0, "候補 %d 個" % len(cands2))
     check("不足を数えている", diag2["vertical_shortfall"] > 0,
           "不足 %d 回" % diag2["vertical_shortfall"])
+
+    print("\n" + "" + "5. **面がセル境界に乗る場合**（縮退。隠さずに記録する）")
+    # x=±4.0・y=±2.5 は 0.25 m の整数倍。**この配置では真値が勝たない。**
+    # これは相関の既知の縮退であり、実データでは起こる理由が無いが、
+    # **起こりうることを検査として残す**（後で対策を入れたときに効果が見える）。
+    dA = box_room(0, 0, 8, 5, n=60)
+    rA = box_room(0, 0, 8, 5, n=60)
+    cA = box_room(16, 0, 22, 2.2, n=60)
+    bpA = np.vstack([rA[0], cA[0]]); blA = np.concatenate([rA[1], cA[1]])
+    bnA = np.vstack([rA[2], cA[2]])
+    cA_, _ = pc.generate_candidates(bpA, blA, bnA, dA[0], dA[1], dA[2],
+                                    [np.eye(3)], NAME_TO_ID)
+    worst = min((abs(c["scale"] - 1.0) for c in cA_), default=9.9)
+    print("     境界に乗せた場合の最良の縮尺誤差: %.1f%%" % (100 * worst))
+    check("**縮退することを記録している**（合否は問わない）", True,
+          "この配置では真値が勝たない。実データでは起こる理由が無い")
 
     print()
     if FAILS:
