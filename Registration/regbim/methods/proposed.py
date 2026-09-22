@@ -44,6 +44,7 @@ from ..metrics import (apply_sim3, chamfer_distance, class_inlier_ratio,
 from ..semantic_icp import semantic_icp
 from ..trace import Tracer
 from .base import BaseRegistration
+from .. import plan_correlate as _plan_corr
 from . import register_method
 
 # Robust span percentiles: trims a few % of stragglers (mislabelled points,
@@ -190,6 +191,62 @@ def _chamfer(T: np.ndarray, src: LabeledCloud, dst: LabeledCloud) -> float:
     return chamfer_distance(apply_sim3(T, src.points), dst.points)
 
 
+def _plan_correlate_seeds(src_p, dst_p, rotations, cfg, pcfg):
+    """案A（R29 §1-2）の種を作る。**既定の経路には一切触れない新しい分岐である。**
+
+    手順 1〜5 は `plan_correlate.generate_candidates` が持つ（向きごとに 4 候補、
+    合計 16）。ここでは手順 6・7 を行う：
+
+    6. **16 候補を短い精緻化へ渡す**（対応距離と Tukey 打切りをともに 1.0 m → 0.5 m、
+       各段階の反復上限 10）
+    7. **各向きから 1 候補ずつ、合計 4 候補を通常の精緻化へ渡す**
+
+    **最終選択は既存のスコアのまま変えない**（R29 §1-2 の最後）。
+    候補生成の変更と選択の変更を混ぜないためである。
+
+    **GT は受け取らない。** 選別は既存の class_inlier_ratio だけで行う。
+    """
+    from ..semantic_icp import semantic_icp as _sicp
+
+    cands, diag = _plan_corr.generate_candidates(
+        src_p.points, src_p.labels, src_p.normals,
+        dst_p.points, dst_p.labels, dst_p.normals,
+        rotations, NAME_TO_ID, pcfg.get("plan_correlate") or {})
+
+    thresh = float(cfg["semantic_icp"]["max_corr_dist"])
+    # 手順 6：短い精緻化。**2 段階（1.0 m → 0.5 m）**、各 10 反復
+    refined = []
+    for c in cands:
+        T = np.asarray(c["T"], dtype=np.float64)
+        for d in (1.0, 0.5):
+            c2 = {**cfg, "semantic_icp": {**cfg["semantic_icp"],
+                                          "max_corr_dist": d, "tukey_c": d,
+                                          "max_iter": 10}}
+            T = _sicp(src_p, dst_p, T, c2, rotation_fixed=True)
+        refined.append({**c, "T_short": T,
+                        "score_short": float(class_inlier_ratio(src_p, dst_p, T,
+                                                                thresh))})
+    # 手順 7：**向きごとに 1 つ**（枠を潰さない。全体上位を取ると向きが偏る）
+    best_per_yaw = {}
+    for r in refined:
+        k = r["yaw_index"]
+        if k not in best_per_yaw or r["score_short"] > best_per_yaw[k]["score_short"]:
+            best_per_yaw[k] = r
+    picked = [best_per_yaw[k] for k in sorted(best_per_yaw)]
+    diag["n_after_short"] = len(refined)
+    diag["n_to_normal"] = len(picked)
+    diag["stage_candidates"] = [
+        {"cand_id": r["cand_id"], "yaw_index": r["yaw_index"],
+         "scale": r["scale"], "shift_xy": r["shift_xy"], "dz": r["dz"],
+         "score_h": r["score_h"], "score_short": r["score_short"],
+         "T_gen": np.asarray(r["T"], dtype=np.float64).tolist(),
+         "T_short": np.asarray(r["T_short"], dtype=np.float64).tolist()}
+        for r in refined]
+    seeds = [(r["T_short"], np.asarray(r["T"], dtype=np.float64)[:3, :3]
+              / r["scale"]) for r in picked]
+    return seeds, diag
+
+
 @register_method("proposed")
 class Proposed(BaseRegistration):
     name = "proposed"
@@ -264,6 +321,12 @@ class Proposed(BaseRegistration):
         # which is the original behaviour; `plane_match` may add a few translation
         # candidates per yaw (see _translation_candidates).
         seeds: List[Tuple[np.ndarray, np.ndarray]] = []      # (init_T, R)
+        plan_diag = None
+        if translation_init == "plan_correlate":
+            # 案A（R29）。**既存の2経路には入らない独立の分岐である。**
+            seeds, plan_diag = _plan_correlate_seeds(src_p, dst_p, candidates,
+                                                     cfg, pcfg)
+            candidates = []          # 下の既定のループを回さない
         for R in candidates:
             src_rot = src_p.points @ R.T                   # source in reference frame
             c_src = _struct_centroid(src_rot, src_p.labels, struct_ids)
@@ -280,6 +343,9 @@ class Proposed(BaseRegistration):
             elif translation_init != "centroid":
                 raise ValueError("unknown proposed.translation_init: %r"
                                  % translation_init)
+        if translation_init not in ("centroid", "plane_match", "plan_correlate"):
+            raise ValueError("unknown proposed.translation_init: %r"
+                             % translation_init)
 
         if translation_init == "plane_match":
             # Scoring every seed with a full ICP would multiply the cost by the
@@ -352,7 +418,21 @@ class Proposed(BaseRegistration):
         # and differ only in translation basin (no cross-yaw/scale ambiguity).
         cand = [(_chamfer(plane_T, src_p, dst_p), plane_T, plane_trace),
                 (_chamfer(refine_T, src_p, dst_p), refine_T, refine_trace)]
-        _, win_T, win_trace = min(cand, key=lambda x: x[0])
+        if translation_init == "plan_correlate":
+            # R29 §2-2：**勝者決定後の重心再初期化を、案A の主経路には入れない。**
+            # 被覆が違うとき重心そのものがずれるので、案A が選んだ位置を
+            # 重心へ引き戻すのは目的に反する。
+            # **ただし比較のため両方を出す**（候補は再生成していない。同じ勝者から）。
+            win_T, win_trace = plane_T, plane_trace
+            if plan_diag is not None:
+                plan_diag["with_centroid_reinit_T"] = np.asarray(
+                    min(cand, key=lambda x: x[0])[1], dtype=np.float64).tolist()
+                plan_diag["without_centroid_reinit_T"] = np.asarray(
+                    plane_T, dtype=np.float64).tolist()
+                plan_diag["chamfer_with_reinit"] = float(min(c[0] for c in cand))
+                plan_diag["chamfer_without_reinit"] = float(cand[0][0])
+        else:
+            _, win_T, win_trace = min(cand, key=lambda x: x[0])
         if tracer is not None and win_trace is not None:
             tracer.steps = win_trace.steps
         if record_stages:
@@ -368,7 +448,9 @@ class Proposed(BaseRegistration):
                 "chamfer_refine": float(cand[1][0]),
                 "final_is_refine": bool(cand[1][0] < cand[0][0]),
                 "final_T": np.asarray(win_T, dtype=np.float64).tolist(),
+                "plan_correlate": plan_diag,
             }
+        self.last_plan_diag = plan_diag
         return win_T
 
     @staticmethod
