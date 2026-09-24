@@ -41,7 +41,7 @@ def rows(base, s, omega):
                     "success": bool(ok),
                     "fail_scale_collapse": bool(e["degenerate"] or not (0.5 <= s1 / sE <= 2.0)),
                     "fail_flip": bool(e["rot_deg"] > 45.0),
-                    "T_est": T.tolist()})
+                    "T_est": T.tolist(), "P": t["P"]})
     return out
 
 
@@ -55,16 +55,19 @@ def main():
         new = rows("output/Registration/gt_a_release", s, omega)
         if new is None:
             print("%-9s 新が無い" % s); continue
-        same_P = all(np.allclose(a["T_est"], a["T_est"]) for a in new)
-        res["scenes"][s] = {"old": old, "new": new}
+        # 対比較の前提：旧と新で摂動 P が試行ごとに同じか
+        po = {x["trial"]: np.asarray(x["P"]) for x in old}
+        same_P = all(x["trial"] in po and np.array_equal(po[x["trial"]], np.asarray(x["P"]))
+                     for x in new)
+        res["scenes"][s] = {"old": old, "new": new, "same_P": same_P}
         for k, r in (("old", old), ("new", new)):
             tot[k][0] += sum(x["success"] for x in r); tot[k][1] += len(r)
         f = lambda r, k: max(x[k] for x in r)
-        print("%-9s 旧 %d/%d (dΩ最大 %.4f 回転最大 %.3f) | 新 %d/%d (dΩ最大 %.4f 回転最大 %.3f) 潰れ %d 反転 %d 縮退 %d"
+        print("%-9s 旧 %d/%d (dΩ最大 %.4f 回転最大 %.3f) | 新 %d/%d (dΩ最大 %.4f 回転最大 %.3f) 潰れ %d 反転 %d 縮退 %d  P同一 %s"
               % (s, sum(x["success"] for x in old), len(old), f(old, "d_omega"), f(old, "rot_deg"),
                  sum(x["success"] for x in new), len(new), f(new, "d_omega"), f(new, "rot_deg"),
                  sum(x["fail_scale_collapse"] for x in new), sum(x["fail_flip"] for x in new),
-                 sum(x["degenerate"] for x in new)), flush=True)
+                 sum(x["degenerate"] for x in new), same_P), flush=True)
     res["totals"] = tot
     print("合計 旧 %d/%d  新 %d/%d" % (tot["old"][0], tot["old"][1], tot["new"][0], tot["new"][1]))
     json.dump(res, open("Registration/output/diag/r36_gta_score.json", "w"), indent=1, ensure_ascii=False)
