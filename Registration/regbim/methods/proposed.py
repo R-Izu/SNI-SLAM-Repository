@@ -254,6 +254,7 @@ class Proposed(BaseRegistration):
     # Filled by ``register`` only when ``diagnostics.record_yaw`` is on; read by
     # the caller right after the call. Not used by the method itself.
     last_yaw_diag: Optional[Dict] = None
+    last_release_diag: Optional[Dict] = None
 
     def register(self, src: LabeledCloud, dst: LabeledCloud, cfg: Dict,
                  tracer: Optional[Tracer] = None) -> np.ndarray:
@@ -433,6 +434,27 @@ class Proposed(BaseRegistration):
                 plan_diag["chamfer_without_reinit"] = float(cand[0][0])
         else:
             _, win_T, win_trace = min(cand, key=lambda x: x[0])
+        # R36 §4 — 回転を解放する短い精緻化（**既定 off。新しい選択肢**）。
+        # 最終解 win_T を初期値に、回転も更新する semantic ICP を短く回す。
+        # 案A の段階1〜段階2 と最終選択のスコアは変えない。**最後に1段足すだけ**。
+        # 事前に固定した設定：反復上限 max_iter（既定 10）、対応距離と Tukey は
+        # config の semantic_icp のまま。off のときはこの分岐に入らず、出力は不変。
+        rel = pcfg.get("rotation_release") or {}
+        release_diag = None
+        if bool(rel.get("enabled", False)):
+            rel_cfg = {**cfg, "semantic_icp": {**cfg["semantic_icp"],
+                                               "max_iter": int(rel.get("max_iter", 10))}}
+            rel_trace = Tracer(1)
+            T_before = win_T
+            win_T = semantic_icp(src_p, dst_p, win_T, rel_cfg, rotation_fixed=False,
+                                 tracer=rel_trace)
+            release_diag = {
+                "T_before": np.asarray(T_before, dtype=np.float64).tolist(),
+                "T_after": np.asarray(win_T, dtype=np.float64).tolist(),
+                "trace": [[int(i), np.asarray(T, dtype=np.float64).tolist()]
+                          for i, T in rel_trace.steps],
+                "max_iter": int(rel_cfg["semantic_icp"]["max_iter"])}
+        self.last_release_diag = release_diag
         if tracer is not None and win_trace is not None:
             tracer.steps = win_trace.steps
         if record_stages:
@@ -449,6 +471,7 @@ class Proposed(BaseRegistration):
                 "final_is_refine": bool(cand[1][0] < cand[0][0]),
                 "final_T": np.asarray(win_T, dtype=np.float64).tolist(),
                 "plan_correlate": plan_diag,
+                "rotation_release": release_diag,
             }
         self.last_plan_diag = plan_diag
         return win_T
