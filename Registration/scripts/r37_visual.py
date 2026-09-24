@@ -42,7 +42,7 @@ NAME = {"bim": "BIM 参照（灰）", "g1": "source を G1 で置いたもの（
         "r35": "R35 の解・回転固定（赤）", "rel": "R36 §4 の解・回転解放（青）",
         "cand": "選ばれなかった候補（橙）"}
 SLAB_HALF = 0.25       # 断面の半幅 [m]（幅 0.5 m）
-END_PCT = (5.0, 95.0)  # 廊下の「両端付近」＝長軸方向の source 点の 5% 点と 95% 点
+END_PCT = (5.0, 95.0)  # 「両端付近」＝長軸方向の点の 5% 点と 95% 点（source と BIM それぞれ）
 
 
 def decimate(p: np.ndarray, n: int = N_MAX) -> np.ndarray:
@@ -94,7 +94,9 @@ def png_views(path_base: str, layers: List[Tuple[np.ndarray, Tuple]], ax_long: i
     out = []
     for view in ("top", "side"):
         fig, ax = plt.subplots(figsize=(12, 6 if view == "side" else 9), dpi=110)
-        for pts, col in layers:
+        # BIM（灰）は最後に描く（色の付いた source に埋もれないように）
+        order = [l for l in layers if l[1] != COL["bim"]] + [l for l in layers if l[1] == COL["bim"]]
+        for pts, col in order:
             if view == "top":
                 x, y = pts[:, 0], pts[:, 1]
             else:
@@ -115,7 +117,8 @@ def png_section(path: str, layers, ax_long: int, title: str) -> str:
     """断面：長軸方向に見る（横軸は短軸、縦軸は Z）。"""
     ax_short = 1 - ax_long
     fig, ax = plt.subplots(figsize=(8, 6), dpi=110)
-    for pts, col in layers:
+    order = [l for l in layers if l[1] != COL["bim"]] + [l for l in layers if l[1] == COL["bim"]]
+    for pts, col in order:
         ax.scatter(pts[:, ax_short], pts[:, 2], s=1.0, c=[col], linewidths=0, rasterized=True)
     ax.set_aspect("equal")
     ax.set_xlabel("BIM %s [m]" % "XY"[ax_short]); ax.set_ylabel("BIM Z [m]")
@@ -235,9 +238,14 @@ def main() -> int:
                            "V4 %s: G1 green / BIM grey" % scene):
             rec.append({"file": os.path.basename(p), "scene": target, "color": "全体図",
                         "points": None, "points_before": None, "source": "同上"})
-        pos = np.percentile(S[:, axl], END_PCT)
-        v4_info[scene] = {"long_axis": "XY"[axl], "slab_centers_m": pos.tolist()}
-        for end, c in zip(("endA", "endB"), pos):
+        # 断面は2組：source の両端（R37 §3-2 の指定）と、BIM 参照がある範囲の両端。
+        # E2 の参照は 411 の範囲だけで、source の廊下の端には BIM が無いため後者も出す。
+        pos_s = np.percentile(S[:, axl], END_PCT)
+        pos_b = np.percentile(dst.points[:, axl], END_PCT)
+        v4_info[scene] = {"long_axis": "XY"[axl], "source_end_centers_m": pos_s.tolist(),
+                          "bim_end_centers_m": pos_b.tolist()}
+        for end, c in (("srcendA", pos_s[0]), ("srcendB", pos_s[1]),
+                       ("bimendA", pos_b[0]), ("bimendB", pos_b[1])):
             sm = np.abs(S[:, axl] - c) < SLAB_HALF
             bm = np.abs(dst.points[:, axl] - c) < SLAB_HALF
             s2, b2 = S[sm], dst.points[bm]
