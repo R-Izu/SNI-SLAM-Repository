@@ -113,12 +113,16 @@ def icp_plane(near_pts, ref):
     return T
 
 
-def fixed_rot_st(near_pts, ref, R):
-    """回転 R（T0 で置いた点に対する補正）を固定し、s・t を点対面で解く（段階ゲート、各段 60 反復）。"""
+def fixed_rot_st(near_pts, ref, R, t0):
+    """回転 R（T0 で置いた点に対する補正）を固定し、s・t を点対面で解く（段階ゲート、各段 60 反復）。
+
+    初期値は s=1・t=t0。near_pts は領域の重心を原点に移した座標なので、t0 には重心を渡す
+    （＝「手動 GT で置いた領域の重心は動かさない」の初期値）。
+    """
     rp, rn = np.asarray(ref.points), np.asarray(ref.normals)
     tree = cKDTree(rp)
     p = near_pts @ R.T                       # 回転は固定
-    s, t = 1.0, np.zeros(3)
+    s, t = 1.0, np.asarray(t0, dtype=np.float64).copy()
     for g in STAGES:
         for _ in range(60):
             x = s * p + t
@@ -174,7 +178,7 @@ def g8(scene, T0, src, ref_pts, ref_nrm):
     # 領域の重心を動かさない回転：x → Rc (x - cen) + cen
     near, ref = prep(v, T0, ref_pts, ref_nrm)
     near_c = near - cen
-    s, t = fixed_rot_st(near_c, ref, Rc)
+    s, t = fixed_rot_st(near_c, ref, Rc, cen)
     # 合成：x_src → T0 → (−cen) → s Rc (·) + t
     M = np.eye(4); M[:3, :3] = s * Rc; M[:3, 3] = t - s * Rc @ np.zeros(3)
     Tc = np.eye(4); Tc[:3, 3] = -cen
