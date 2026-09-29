@@ -6,7 +6,8 @@
 共通（R10 の `criterion_spread.py` と同じ扱い）
 - 初期値：手動 GT（ICP 前、`output/GT_alignment/T_gt_manual`）
 - 参照：`Registration/output/ifc/m3_ifc_all.npz` の室内面（`is_inner`）
-- source：`output/GT_alignment/source/<scene>.ply` のメッシュ頂点。クラスは頂点色から `color_to_label`
+- source：`output/GT_alignment/source/<scene>.ply` のメッシュ頂点。クラスは、同じ頂点を持つ意味付きメッシュ
+  （config の `source.mesh_path`）の頂点色から `color_to_label`（キットのメッシュの色は写真の RGB。2026-09-30 訂正）
 
 G7（壁だけの ICP）
 - G1 と同じ：点対面・段階ゲート 0.30→0.15→0.08・voxel 0.03・各段 60 反復・剛体・BIM から 0.6 m 以内の source 点だけ
@@ -77,10 +78,22 @@ def load_ref(wall_only=False):
 
 
 def load_src(scene):
+    """頂点と法線はキットのメッシュ（G1 と同じ）、クラスは意味付きメッシュから頂点の番号で取る。
+
+    ★ キットの `source/<scene>.ply` の頂点色は**写真の RGB**で、クラスではない（色の種類が 13 万）。
+      ここから `color_to_label` すると wall が 0.1〜0.2% しか出ない（初版の誤り。コミット 1f8875f まで）。
+      意味付きメッシュ（config の `source.mesh_path`）は**同じ頂点を持つ**ので、頂点が一致することを確かめてから
+      その頂点色でクラスを付ける。
+    """
     mesh = o3d.io.read_triangle_mesh(os.path.join(KIT, "source", "%s.ply" % scene))
     mesh.compute_vertex_normals()
     v = np.asarray(mesh.vertices)
-    return v, np.asarray(mesh.vertex_normals), color_to_label(np.asarray(mesh.vertex_colors))
+    sem_path = yaml.safe_load(open("Registration/configs/realdata/%s__E2.yaml" % scene))["source"]["mesh_path"]
+    sem = o3d.io.read_triangle_mesh(sem_path)
+    vs = np.asarray(sem.vertices)
+    if len(vs) != len(v) or not np.array_equal(vs, v):
+        raise ValueError("キットのメッシュと意味付きメッシュの頂点が一致しない: %s" % scene)
+    return v, np.asarray(mesh.vertex_normals), color_to_label(np.asarray(sem.vertex_colors))
 
 
 def pcd(p, n=None):
