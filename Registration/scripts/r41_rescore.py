@@ -272,6 +272,10 @@ def main():
         cs = [res["synth"][k]["curve_eO"] for k in res["synth"] if k.startswith("D4|%s|" % m)]
         res["D4_pooled_equal_scene_weight"][m] = {"%g" % a: list(np.mean([c["%g" % a] for c in cs], axis=0)) for a in A_GRID}
 
+    # 全試行・全基準の値（R41 §5-3）。無効な試行の量は inf
+    strip = lambda r: {k: v for k, v in r.items() if k != "per"}
+    res["trials_real"] = [dict(strip(r), per={str(j): p for j, p in r["per"].items()}) for r in real]
+    res["trials_synth"] = [dict(strip(r), per=r["per"]["GA"]) for r in syn]
     json.dump(res, open(os.path.join(OUT, "r41_rescore.json"), "w"), ensure_ascii=False, default=float)
     print("wrote", os.path.join(OUT, "r41_rescore.json"))
 
