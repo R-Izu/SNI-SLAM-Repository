@@ -4,7 +4,8 @@
 ------------------------------------------------------
 1. 点群は `register` と同じ前処理（`preprocess.prepare`：法線推定 → voxel 0.05 m）をしたもの
 2. クラスごと（wall が判定用。floor・ceiling は記述）に、平らな面を順に取り出す
-   a. 残りの点に RANSAC で平面を当てる（Open3D `segment_plane`、距離 RANSAC_DIST、3 点、RANSAC_ITERS 回、乱数 seed 0）
+   a. 残りの点に RANSAC で平面を当てる（numpy 実装、距離 RANSAC_DIST、3 点、RANSAC_ITERS 回、乱数 seed 0。
+      Open3D 0.13 の `segment_plane` は乱数を固定できないため）
    b. その平面から BAND 以内の点を候補にし、DBSCAN（eps DBSCAN_EPS、最小 DBSCAN_MIN 点）で最大の連結成分を 1 枚の面とする
    c. 面の点で平面を当て直す（重心と、共分散の最小固有ベクトル＝単位法線 n）
    d. 符号つき残差 r_i = n·(p_i − p0)、σ = 1.4826 · median|r_i − median r_j|（§6-1）
@@ -56,18 +57,31 @@ OBSERVED = 0.62                              # R41 §4-1 D3 S off、G1 の中央
 OUT = "Registration/output/diag/r42"
 
 
+def ransac_plane(P: np.ndarray, rng) -> tuple:
+    best_n, best_d, best_k = None, None, -1
+    for _ in range(RANSAC_ITERS):
+        a, b, c = P[rng.choice(len(P), 3, replace=False)]
+        n = np.cross(b - a, c - a); L = np.linalg.norm(n)
+        if L < 1e-12:
+            continue
+        n = n / L; d = -n @ a
+        k = int((np.abs(P @ n + d) < RANSAC_DIST).sum())
+        if k > best_k:
+            best_n, best_d, best_k = n, d, k
+    return best_n, best_d, best_k
+
+
 def planes(points: np.ndarray) -> list:
-    o3d.utility.random.seed(0)
+    rng = np.random.default_rng(0)
     rest = np.arange(len(points)); out = []
     for _ in range(MAX_PLANES):
         if len(rest) < MIN_INLIERS:
             break
-        pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points[rest]))
-        model, inl = pc.segment_plane(RANSAC_DIST, 3, RANSAC_ITERS)
-        if len(inl) < MIN_INLIERS:
+        a, d, k = ransac_plane(points[rest], rng)
+        if a is None or k < MIN_INLIERS:
             break
-        a = np.asarray(model[:3]); a = a / np.linalg.norm(a)
-        dist = np.abs(points[rest] @ a + model[3] / np.linalg.norm(model[:3]))
+        dist = np.abs(points[rest] @ a + d)
+        inl = np.where(dist < RANSAC_DIST)[0]
         cand = np.where(dist < BAND)[0]
         lab = np.asarray(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points[rest[cand]])).cluster_dbscan(DBSCAN_EPS, DBSCAN_MIN))
         if (lab >= 0).sum() == 0:
