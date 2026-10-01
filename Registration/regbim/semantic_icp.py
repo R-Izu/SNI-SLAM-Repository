@@ -34,8 +34,16 @@ def semantic_icp(
     cfg: Dict,
     rotation_fixed: Optional[bool] = None,
     tracer: Optional[Tracer] = None,
+    label_filter: bool = True,
 ) -> np.ndarray:
-    """Iterative class-constrained Sim3 refinement. Returns a 4x4 Sim3 matrix."""
+    """Iterative class-constrained Sim3 refinement. Returns a 4x4 Sim3 matrix.
+
+    ``label_filter`` (R42 §4-2, default True = the existing behaviour): source
+    points whose label is not a match class (background = non-structural) are
+    dropped from the correspondences. With ``False`` they are kept and matched to
+    the nearest destination point of *any* class, under the same distance cut-off
+    and Tukey weights as every other point. Nothing else changes.
+    """
     icfg = cfg["semantic_icp"]
     if rotation_fixed is None:
         rotation_fixed = bool(icfg.get("rotation_fixed", False))
@@ -65,6 +73,9 @@ def semantic_icp(
     dst_pts = {c: dst.points[dst.labels == c] for c in common}
     trees = {c: cKDTree(dst_pts[c]) for c in common if len(dst_pts[c]) > 0}
     src_pts = {c: src.points[src.labels == c] for c in common}
+    if not label_filter:
+        other_mask = ~np.isin(src.labels, match_ids)
+        any_tree = cKDTree(dst.points) if other_mask.any() and len(dst.points) else None
 
     T = np.array(init_T, dtype=np.float64)
     R_fixed, _, _ = decompose_sim3(T)
@@ -87,6 +98,13 @@ def semantic_icp(
             s_list.append(src.points[sm][keep])
             d_list.append(dst_pts[c][idx[keep]])
             w_list.append(_tukey_weights(dist[keep], tukey_c))
+        if not label_filter and any_tree is not None:
+            dist, idx = any_tree.query(moved[other_mask], k=1, workers=-1)
+            keep = dist < max_corr
+            if keep.sum() > 0:
+                s_list.append(src.points[other_mask][keep])
+                d_list.append(dst.points[idx[keep]])
+                w_list.append(_tukey_weights(dist[keep], tukey_c))
         if not s_list:
             break
         src_corr = np.concatenate(s_list, axis=0)
