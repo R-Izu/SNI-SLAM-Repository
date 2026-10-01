@@ -265,6 +265,10 @@ class Proposed(BaseRegistration):
             dst_p = preprocess.prepare(dst, cfg)
         thresh = float(cfg["semantic_icp"]["max_corr_dist"])
         abl = cfg.get("ablation") or {}
+        # R42 §4-2: label_filter.enabled (default on = existing behaviour). Off lets
+        # non-structural (background) points into the ICP correspondences; the
+        # rotation estimate and the plan_correlate candidate generation are unchanged.
+        lf = bool(((cfg.get("proposed") or {}).get("label_filter") or {}).get("enabled", True))
 
         struct_ids = [NAME_TO_ID[n] for n in cfg["classes"]["structural"]]
 
@@ -281,7 +285,7 @@ class Proposed(BaseRegistration):
             init_T = make_sim3(np.eye(3), c_dst - c_src, 1.0)
             with _ins.stage("icp", tag="icp_free"):
                 return semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=False,
-                                    tracer=tracer)
+                                    tracer=tracer, label_filter=lf)
 
         # Ablation `single_class` = **removal of class-constrained correspondence**
         # (ICP matching and the candidate score stop distinguishing classes).
@@ -381,7 +385,7 @@ class Proposed(BaseRegistration):
             cand_tracer = Tracer(tracer.stride) if tracer is not None else None
             with _ins.stage("icp", tag="icp_normal"):
                 T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True,
-                                 tracer=cand_tracer)
+                                 tracer=cand_tracer, label_filter=lf)
             with _ins.stage("select"):
                 score = class_inlier_ratio(src_score, dst_score, T, thresh)
             if record_yaw:
@@ -422,7 +426,7 @@ class Proposed(BaseRegistration):
         refine_trace = Tracer(tracer.stride) if tracer is not None else None
         with _ins.stage("icp", tag="icp_refine"):
             refine_T = semantic_icp(src_p, dst_p, refine_T0, cfg, rotation_fixed=True,
-                                    tracer=refine_trace)
+                                    tracer=refine_trace, label_filter=lf)
 
         # Pick by chamfer: safe here because both poses share the locked (R, s)
         # and differ only in translation basin (no cross-yaw/scale ambiguity).
