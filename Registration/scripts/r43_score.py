@@ -14,7 +14,8 @@
 - 対応比較 off − on の Δe_Ω・Δe_R と、向きが G1〜G6、G1〜G8 で保たれるか
 """
 import json, os, sys
-from math import comb
+from scipy.special import comb as _comb
+comb = lambda n, k: _comb(n, k, exact=True)                              # Python 3.7 に math.comb が無い
 import numpy as np
 import yaml
 
