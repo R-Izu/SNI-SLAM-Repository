@@ -1,4 +1,4 @@
-# R45（自動生成。手で編集しない）。gt_a/office_2.yaml に proposed.translation_init: plan_correlate だけを足した
+# R45（自動生成。手で編集しない）。gt_a/office_2.yaml に reference.seed: 0 と proposed.translation_init: plan_correlate を足した
 source:
   type: points_ply
   mesh_path: output/GT_A/office_2_source.ply
@@ -17,6 +17,7 @@ reference:
   - 0.0015722848
   - -0.0022704075
   - -0.9999962449
+  seed: 0
 classes:
   names:
   - background
