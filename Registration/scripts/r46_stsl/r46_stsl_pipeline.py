@@ -113,7 +113,9 @@ def register(setname, setting, k, seq, seq_dir, T_trues, trp, floor):
             else:
                 x, y, yaw = 0.0, 0.0, 0.0                      # 正解が無い入力（成功判定は使わない）
             f.write("%r %r %r\n" % (float(x), float(y), float(yaw)))
-    rc = write_yaml(SETTINGS[setting][1], os.path.join(ROOT, "cfg", "%s_%s.yaml" % (seq, floor)), {"seq": seq, "floor": floor_s})
+    # 登録の config は STSL の configs/interval/ の下に置く（InitGLOG がその位置を前提にしている。STSL の .git/info/exclude で追跡から外す）
+    rc = write_yaml(SETTINGS[setting][1], os.path.join(STSL, "configs", "interval", "r46", "%s_%s.yaml" % (seq, floor)),
+                    {"seq": seq, "floor": floor_s})
     out = os.path.join(ROOT, "results", setname); os.makedirs(out, exist_ok=True)
     out = os.path.join(out, "%s_k%d_%s.jsonl" % (setting, k, floor))
     r = subprocess.run([os.path.join(BUILD, "r46_reg_dump"), rc, out], capture_output=True, text=True)
