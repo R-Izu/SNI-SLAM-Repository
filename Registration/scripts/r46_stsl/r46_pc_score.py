@@ -12,7 +12,7 @@ import json, os, re
 
 def jl(line):
     """C++ が書く inf・nan を JSON の Infinity・NaN に直して読む"""
-    return json.loads(re.sub(r"(?<![A-Za-z])(-?)inf(?![A-Za-z])", r"Infinity", line).replace("nan", "NaN"))
+    return json.loads(re.sub(r"(?<![A-Za-z])(-?)inf(?![A-Za-z])", lambda m: m.group(1) + "Infinity", line).replace("nan", "NaN"))
 
 ROOT = os.environ.get("R46_STSL_ROOT", os.path.expanduser("~/rizu/r46_stsl_data"))
 K, N, FLOOR = 5, 10, "M3_410_411"
