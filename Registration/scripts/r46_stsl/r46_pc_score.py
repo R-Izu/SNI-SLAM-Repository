@@ -7,7 +7,12 @@ k ごとの件数（10 試行中）と、全 50 回の件数も記述として�
 
 使い方：python r46_pc_score.py（libim でも sni-slam でもよい。numpy と json だけを使う）
 """
-import json, os
+import json, os, re
+
+
+def jl(line):
+    """C++ が書く inf・nan を JSON の Infinity・NaN に直して読む"""
+    return json.loads(re.sub(r"(?<![A-Za-z])(-?)inf(?![A-Za-z])", r"Infinity", line).replace("nan", "NaN"))
 
 ROOT = os.environ.get("R46_STSL_ROOT", os.path.expanduser("~/rizu/r46_stsl_data"))
 K, N, FLOOR = 5, 10, "M3_410_411"
@@ -18,7 +23,7 @@ def main():
     for st in ("A", "B"):
         per = {i: [] for i in range(N)}; by_k = {}
         for k in range(1, K + 1):
-            rows = [json.loads(l) for l in open(os.path.join(ROOT, "results", "pc", "%s_k%d_%s.jsonl" % (st, k, FLOOR)))]
+            rows = [jl(l) for l in open(os.path.join(ROOT, "results", "pc", "%s_k%d_%s.jsonl" % (st, k, FLOOR)))]
             assert len(rows) == N, (st, k, len(rows))
             by_k[k] = sum(r["success_stsl"] for r in rows)
             for r in rows:
