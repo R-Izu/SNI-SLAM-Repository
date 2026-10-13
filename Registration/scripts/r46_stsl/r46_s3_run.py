@@ -8,7 +8,7 @@
 使い方：python r46_s3_run.py [並列数] [set の接頭辞 ...]（例：bim_ で BIM 由来の対照だけ）
 """
 import json, os, shutil, sys
-from multiprocessing import Pool
+import multiprocessing as mp
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -59,7 +59,7 @@ def main():
     for a in first.values():                          # ハッシュ表を作る最初の 1 組は順に
         print("warm", job(a), flush=True)
     rest = [a for a in jobs if a not in first.values()]
-    with Pool(npar) as p:
+    with mp.get_context("spawn").Pool(npar) as p:   # fork だと open3d・OpenMP を読んだ後に固まった
         for i, a in enumerate(p.imap_unordered(job, rest)):
             if i % 20 == 0:
                 print("done", i + 1, "/", len(rest), a, flush=True)
