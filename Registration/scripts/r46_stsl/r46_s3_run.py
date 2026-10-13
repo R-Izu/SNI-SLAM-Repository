@@ -12,7 +12,16 @@ import multiprocessing as mp
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import r46_stsl_pipeline as pl                                          # noqa: E402
+import random, time                                                     # noqa: E402
+for _try in range(20):
+    # STSL の preprocess.config は読み込み時に時刻名のログのディレクトリを作る。spawn のワーカーが同じ秒に読むとぶつかるので、待ってやり直す
+    try:
+        import r46_stsl_pipeline as pl                                  # noqa: E402
+        break
+    except FileExistsError:
+        for m in [m for m in sys.modules if m.startswith("preprocess") or m == "r46_stsl_pipeline"]:
+            del sys.modules[m]
+        time.sleep(1.0 + random.random())
 
 ROOT = pl.ROOT
 SIGMAS = np.exp(np.linspace(np.log(0.3), np.log(3.0), 59))

@@ -76,7 +76,13 @@ def prep(setname, setting, k):
     spec = json.load(open(spec_p)) if os.path.exists(spec_p) else None
     xyyaw, trp, prep_failed = [], {}, []
     for i, f in enumerate(files):
-        pcd2d = PCD2dManager(dirs.submap3d_wall_pcd_dir, dirs.submap3d_ground_pcd_dir, cfg).generate_pcd2d_list(num=1, start=i)
+        try:
+            pcd2d = PCD2dManager(dirs.submap3d_wall_pcd_dir, dirs.submap3d_ground_pcd_dir, cfg).generate_pcd2d_list(num=1, start=i)
+            lines = LineSegmentManager(cfg).submap_image_based_extract(pcd2d[0]) if pcd2d else None
+        except (ValueError, IndexError):
+            # 公式の前処理が例外で止まった試行（例：縮尺を小さくして壁が高さの切り取り範囲から外れ、壁の点が空）も、
+            # 地面の当てはめの失敗と同じく「推定なし」にする
+            pcd2d = None
         if not pcd2d:
             # 公式の前処理（地面の平面の当てはめ）が失敗した試行：STSL の出力を「推定なし」にする（1 点の占有・自由空間、
             # 空の線分 → 候補 0）。採点では無効な出力（v = 0）として数え、分類は prep_failed（§9-2）
@@ -94,7 +100,6 @@ def prep(setname, setting, k):
         flat = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts)).voxel_down_sample(0.05)
         free = pcd2d.og_ground.voxel_down_sample(voxel_size=0.3)
         fp = np.asarray(free.points); free = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(fp[fp[:, 2] < 0.01]))
-        lines = LineSegmentManager(cfg).submap_image_based_extract(pcd2d)
         o3d.io.write_point_cloud(os.path.join(dirs.occupied_pcd_flatten_dir, "%06d.pcd" % i), flat)
         o3d.io.write_point_cloud(os.path.join(dirs.free_pcd_dir, "%06d.pcd" % i), free)
         lines.save_to_file(os.path.join(dirs.lineseg_dir, "%06d.txt" % i))
