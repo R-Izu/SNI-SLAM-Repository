@@ -70,7 +70,8 @@ def setup(base):
 def main():
     res = {"provenance": provenance(), "sigmas": SIGMAS.tolist(), "sets": {}}
     n_prep = n_reg = 0; t_prep = []; t_reg = []
-    for base in FLOORS:
+    only = sys.argv[1:] or list(FLOORS)          # 例：bim_E2 bim_E3（GT-A は main の判断待ちで回していない）
+    for base in [b for b in FLOORS if b in only]:
         G, om, planA = setup(base)
         spec = json.load(open(os.path.join(ROOT, "inputs_s3", base, "spec.json")))
         zf = json.load(open(os.path.join(ROOT, "BIM", FLOORS[base], "meta.json")))["z_floor"]
