@@ -74,11 +74,20 @@ def prep(setname, setting, k):
         os.makedirs(d, exist_ok=True)
     spec_p = os.path.join(inp, "spec.json")
     spec = json.load(open(spec_p)) if os.path.exists(spec_p) else None
-    xyyaw, trp = [], {}
+    xyyaw, trp, prep_failed = [], {}, []
     for i, f in enumerate(files):
         pcd2d = PCD2dManager(dirs.submap3d_wall_pcd_dir, dirs.submap3d_ground_pcd_dir, cfg).generate_pcd2d_list(num=1, start=i)
         if not pcd2d:
-            raise RuntimeError("pcd2d failed for %s %d" % (seq, i))
+            # 公式の前処理（地面の平面の当てはめ）が失敗した試行：STSL の出力を「推定なし」にする（1 点の占有・自由空間、
+            # 空の線分 → 候補 0）。採点では無効な出力（v = 0）として数え、分類は prep_failed（§9-2）
+            one = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.zeros((1, 3))))
+            o3d.io.write_point_cloud(os.path.join(dirs.occupied_pcd_flatten_dir, "%06d.pcd" % i), one)
+            o3d.io.write_point_cloud(os.path.join(dirs.free_pcd_dir, "%06d.pcd" % i), one)
+            open(os.path.join(dirs.lineseg_dir, "%06d.txt" % i), "w").close()
+            trp[i] = np.eye(4).tolist(); prep_failed.append(i)
+            if spec is not None:
+                xyyaw.append(np.asarray(spec["trials"][i]["T_true"], dtype=np.float64))
+            continue
         pcd2d = pcd2d[0]
         occ = pcd2d.og_walls_cropped
         pts = np.asarray(occ.points).copy(); pts[:, 2] = 0
@@ -96,7 +105,7 @@ def prep(setname, setting, k):
     json.dump(trp, open(os.path.join(dirs.seq_dir, "T_rp.json"), "w"))
     t_py = time.time() - t_py
     os.makedirs(os.path.join(ROOT, "results", setname), exist_ok=True)
-    json.dump({"plane_seg_s": t_ps, "python_prep_s": t_py, "n_inputs": len(files)},
+    json.dump({"plane_seg_s": t_ps, "python_prep_s": t_py, "n_inputs": len(files), "prep_failed": prep_failed},
               open(os.path.join(ROOT, "results", setname, "%s_k%d_prep_time.json" % (setting, k)), "w"))
     return seq, dirs.seq_dir, xyyaw, trp
 

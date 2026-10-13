@@ -90,7 +90,7 @@ def main():
                             for j in per:
                                 per[j] = dict(per[j], v=False)
                         cand = r["candidates"]
-                        cls = ("no_candidate" if not cand else
+                        cls = ("prep_failed" if i in pt.get("prep_failed", []) else "no_candidate" if not cand else
                                ("chosen_correct" if r["success_stsl"] else
                                 ("correct_existed_other_chosen" if any(c["correct"] for c in cand) else "no_correct_candidate")))
                         runs[i].append({"per": per, "success_stsl": bool(r["success_stsl"]) and valid, "no_candidate": not cand,
@@ -116,7 +116,7 @@ def main():
                                     "n_success_stsl_majority": sum(sum(x["success_stsl"] for x in t["runs"]) >= 3 for t in tr),
                                     "n_no_candidate_majority": sum(sum(x["no_candidate"] for x in t["runs"]) >= 3 for t in tr),
                                     "classes": {c: sum(x["class"] == c for t in tr for x in t["runs"]) for c in
-                                                ("chosen_correct", "no_candidate", "correct_existed_other_chosen", "no_correct_candidate")}})
+                                                ("chosen_correct", "prep_failed", "no_candidate", "correct_existed_other_chosen", "no_correct_candidate")}})
             pairs = {}
             for a, b in (("planA", "STSL_best"), ("planA_fixed", "STSL_best"), ("planA", "centroid"), ("planA", "planA_fixed")):
                 fa, fb = fails(a, 1), fails(b, 1)
