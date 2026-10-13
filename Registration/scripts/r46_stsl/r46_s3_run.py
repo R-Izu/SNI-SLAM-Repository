@@ -33,7 +33,7 @@ K = 5
 def job(a):
     base, st, j = a
     name = "s3_%s_j%02d" % (base, j)
-    src = os.path.join(ROOT, "inputs_s3", base); tmp = os.path.join(ROOT, "inputs", name)
+    src = os.path.join(ROOT, "inputs_s3", base); tmp = os.path.join(ROOT, "inputs", name + "_" + st + "_tmp")   # 設定ごとに分ける（同じ縮尺の A・B が消し合わないように）
     os.makedirs(tmp, exist_ok=True)
     spec = json.load(open(os.path.join(src, "spec.json")))
     D = np.diag([SIGMAS[j]] * 3 + [1.0]); Di = np.linalg.inv(D)
@@ -45,8 +45,10 @@ def job(a):
     for k in range(1, K + 1):
         if os.path.exists(os.path.join(res_dir, "%s_k%d_%s.jsonl" % (st, k, SETS[base]))):
             continue
-        seq, seq_dir, T_trues, trp = pl.prep(name, st, k)
-        pl.register(name, st, k, seq, seq_dir, T_trues, trp, SETS[base])
+        seq, seq_dir, T_trues, trp = pl.prep(os.path.basename(tmp), st, k)
+        pl.register(os.path.basename(tmp), st, k, seq, seq_dir, T_trues, trp, SETS[base])
+        for f in ("%s_k%d_%s.jsonl" % (st, k, SETS[base]), "%s_k%d_prep_time.json" % (st, k)):   # 結果は元の名前の場所へ
+            shutil.move(os.path.join(ROOT, "results", os.path.basename(tmp), f), os.path.join(res_dir, f))
         shutil.copy(os.path.join(seq_dir, "T_rp.json"), os.path.join(res_dir, "%s_k%d_T_rp.json" % (st, k)))
         shutil.rmtree(os.path.join(ROOT, seq), ignore_errors=True)
         shutil.rmtree(os.path.join(ROOT, "processed", seq), ignore_errors=True)
