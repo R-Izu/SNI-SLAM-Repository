@@ -14,6 +14,9 @@
    ずらした量 z_floor（参照の floor の点の z の中央値）を `meta.json` に残し、STSL の変換を BIM 座標に戻すときに足す
 
 出力：`$R46_STSL_ROOT/BIM/<名前>/`（R46_STSL_ROOT の既定 ~/rizu/r46_stsl_data）
+
+R46 §10-2 B1（両面）：`python r46_stsl_bim.py both` で、参照を `inner_only: false` にして読み（壁の要素の両面と端部の面）、
+同じ作り方で `M3_410_411_both`・`M3_411_both` を作る。室内面の版（引数なし）は変えない。
 """
 import json, os, sys
 import numpy as np
@@ -73,10 +76,15 @@ def lines_from_walls(P, N):
 
 
 def main():
+    both = len(sys.argv) > 1 and sys.argv[1] == "both"
     for name, cfgname in REFS.items():
         cfg = yaml.safe_load(open("Registration/configs/%s.yaml" % cfgname))
+        if both:
+            cfg["reference"] = dict(cfg["reference"], inner_only=False); name = name + "_both"
         ref = io_utils.load_reference_cloud(cfg)
-        z_floor = float(np.median(ref.points[ref.labels == NAME_TO_ID["floor"], 2]))
+        # 床の高さは部屋の床面（室内面）から決める。両面で読むとスラブの下面が混ざるため、室内面の版の値を使う
+        ref_in = io_utils.load_reference_cloud(yaml.safe_load(open("Registration/configs/%s.yaml" % cfgname)))
+        z_floor = float(np.median(ref_in.points[ref_in.labels == NAME_TO_ID["floor"], 2]))
         w = (ref.labels == NAME_TO_ID["wall"]) & (np.abs(ref.normals[:, 2]) < 0.3)
         P = ref.points[w] - np.array([0.0, 0.0, z_floor]); Nn = ref.normals[w]
         segs = lines_from_walls(P, Nn)
@@ -89,7 +97,7 @@ def main():
         for f in ("bimHashTable.bin", "bimHashNeighTable.bin", "bimHashIntTable.bin"):   # 古いハッシュ表は消して作り直させる
             if os.path.exists(os.path.join(d, f)):
                 os.remove(os.path.join(d, f))
-        meta = {"reference_config": cfgname, "z_floor": z_floor, "n_wall_points": int(len(P)), "n_segments": int(len(segs)),
+        meta = {"reference_config": cfgname, "inner_only": not both, "z_floor": z_floor, "n_wall_points": int(len(P)), "n_segments": int(len(segs)),
                 "segment_length_total_m": float(np.sum(np.hypot(segs[:, 2] - segs[:, 0], segs[:, 3] - segs[:, 1]))),
                 "params": {"ANG_BIN": ANG_BIN, "OFF_BIN": OFF_BIN, "MIN_PTS": MIN_PTS, "GAP": GAP, "MIN_LEN": MIN_LEN}}
         json.dump(meta, open(os.path.join(d, "meta.json"), "w"), indent=1)
