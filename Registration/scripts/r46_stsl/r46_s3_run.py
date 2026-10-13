@@ -5,7 +5,7 @@
 最良の縮尺の選び方（採点側 `r46_s3_score.py`）：STSL 自身の検証スコア（optimal_score）が最大の縮尺。候補なしの縮尺は飛ばし、
 全縮尺で候補なしなら無効。
 容量のため、縮尺をかけた入力と前処理の中間ファイルは登録の後に消す（T_rp と結果の jsonl は残す）。
-使い方：python r46_s3_run.py [並列数]
+使い方：python r46_s3_run.py [並列数] [set の接頭辞 ...]（例：bim_ で BIM 由来の対照だけ）
 """
 import json, os, shutil, sys
 from multiprocessing import Pool
@@ -51,7 +51,8 @@ def job(a):
 
 def main():
     npar = int(sys.argv[1]) if len(sys.argv) > 1 else 24
-    jobs = [(b, st, j) for b in SETS for st in "AB" for j in range(len(SIGMAS))]
+    pref = sys.argv[2:] or [""]
+    jobs = [(b, st, j) for b in SETS if any(b.startswith(x) for x in pref) for st in "AB" for j in range(len(SIGMAS))]
     first = {}
     for a in jobs:
         first.setdefault((SETS[a[0]], a[1]), a)
