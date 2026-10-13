@@ -16,7 +16,7 @@
 
 使い方：python r46_stsl_pipeline.py <set> <setting A|B> <K> <floor> [<floor> ...]
 """
-import copy, json, os, shutil, subprocess, sys
+import copy, json, os, shutil, subprocess, sys, time
 import numpy as np
 import yaml
 
@@ -59,11 +59,13 @@ def prep(setname, setting, k):
     for f in files:
         pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.load(os.path.join(inp, f)).astype(np.float64)))
         o3d.io.write_point_cloud(os.path.join(sub, "points", f.replace(".npy", ".pcd")), pc)
+    t_ps = time.time()
     ps_cfg = write_yaml(SETTINGS[setting][0], os.path.join(ROOT, "cfg", seq + "_pointsam.yaml"),
                         {"benchmarks.seq": seq, "benchmarks.interval": "30m", "benchmarks.maptype": "submap3d"})
     r = subprocess.run([os.path.join(BUILD, "r46_plane_seg"), ps_cfg], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(r.stdout[-2000:] + r.stderr[-2000:])
+    t_ps = time.time() - t_ps; t_py = time.time()
     # 公式の Python の前処理（cfg は EasyDict の大域変数なので、毎回読み直す）
     iv_cfg = write_yaml(SETTINGS[setting][1], os.path.join(ROOT, "cfg", seq + "_interval_prep.yaml"), {"seq": seq})
     cfg = load_cfg(iv_cfg)
@@ -92,6 +94,10 @@ def prep(setname, setting, k):
             T_true = np.asarray(spec["trials"][i]["T_true"], dtype=np.float64)
             xyyaw.append(T_true)          # z_floor は floor ごとに違いうるので、ここでは T_true を残し、下で floor ごとに書く
     json.dump(trp, open(os.path.join(dirs.seq_dir, "T_rp.json"), "w"))
+    t_py = time.time() - t_py
+    os.makedirs(os.path.join(ROOT, "results", setname), exist_ok=True)
+    json.dump({"plane_seg_s": t_ps, "python_prep_s": t_py, "n_inputs": len(files)},
+              open(os.path.join(ROOT, "results", setname, "%s_k%d_prep_time.json" % (setting, k)), "w"))
     return seq, dirs.seq_dir, xyyaw, trp
 
 
