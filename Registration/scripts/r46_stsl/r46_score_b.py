@@ -1,4 +1,4 @@
-"""R46 §10-2：B1（BIM 入力を両面から）と B2（入力の壁が軸に近い試行を除く）の採点（sni-slam の環境）。
+"""R46 §10-2・§11-2：B1（両面）・B3（基準線、STSL_best6 = 6 変種の良い方。出力は r46_score_b3.json）と、B1（BIM 入力を両面から）と B2（入力の壁が軸に近い試行を除く）の採点（sni-slam の環境）。
 
 **B1 は回す前に、B2 は段階1の結果を見た後の解析として、この規則を固定する。**
 - STSL の変種：BIM 入力 {室内面 inner、両面 both} × 設定 {A, B}。大きな失敗の定義・多数決（5 回中 3 回）・無効の扱いは段階1と同じ
@@ -25,7 +25,7 @@ from scipy.special import comb as _comb                          # noqa: E402
 
 ROOT = os.environ.get("R46_STSL_ROOT", os.path.expanduser("~/rizu/r46_stsl_data"))
 CUTS = ["0p5", "3", "8", "inf"]
-VARS = ["inner_A", "inner_B", "both_A", "both_B"]
+VARS = ["inner_A", "inner_B", "both_A", "both_B", "axis_A", "axis_B"]
 FLOOR = {"E2": "M3_411", "E3": "M3_410_411"}
 K = 5
 
@@ -43,7 +43,7 @@ def big(p):
     return (not p["v"]) or p["eR"] >= 45.0 or p["eO"] >= 1.0
 
 
-def load_both(name, ref, Gs, om, omb, spec, zf):
+def load_variant(name, ref, Gs, om, omb, spec, zf, variant):
     S = np.eye(4); S[2, 3] = zf
     out = {}
     for st in "AB":
@@ -52,7 +52,7 @@ def load_both(name, ref, Gs, om, omb, spec, zf):
             seq = "real_%s_%s_k%d" % (name, st, k)
             trp = json.load(open(os.path.join(ROOT, "processed", seq, "30m", "T_rp.json")))
             pt = json.load(open(os.path.join(ROOT, "results", "real_" + name, "%s_k%d_prep_time.json" % (st, k))))
-            for r in (jl(l) for l in open(os.path.join(ROOT, "results", "real_" + name, "%s_k%d_%s_both.jsonl" % (st, k, FLOOR[ref])))):
+            for r in (jl(l) for l in open(os.path.join(ROOT, "results", "real_" + name, "%s_k%d_%s_%s.jsonl" % (st, k, FLOOR[ref], variant)))):
                 i = r["index"]; t = spec["trials"][i]
                 T = S @ np.asarray(r["tf"]).reshape(4, 4) @ np.asarray(trp[str(i)]) @ np.asarray(t["A"]) @ np.asarray(t["Rg"])
                 valid = len(r["candidates"]) > 0 and isfinite(r["optimal_score"])
@@ -64,7 +64,7 @@ def load_both(name, ref, Gs, om, omb, spec, zf):
                        ("chosen_correct" if r["success_stsl"] else
                         ("correct_existed_other_chosen" if any(c["correct"] for c in cand) else "no_correct_candidate")))
                 runs[i].append({"per": per, "success_stsl": bool(r["success_stsl"]) and valid, "no_candidate": not cand, "class": cls})
-        out["both_" + st] = [{"runs": runs[i]} for i in range(10)]
+        out[variant + "_" + st] = [{"runs": runs[i]} for i in range(10)]
     return out
 
 
@@ -85,7 +85,8 @@ def main():
         Gs = real_criteria(scene)
         meth = {m: c["trials"][m] for m in ("planA", "planA_fixed", "centroid")}
         meth["inner_A"] = c["trials"]["STSL_A"]; meth["inner_B"] = c["trials"]["STSL_B"]
-        meth.update(load_both(name, ref, Gs, om_all[scene], omb_all[target], spec, zf))
+        meth.update(load_variant(name, ref, Gs, om_all[scene], omb_all[target], spec, zf, "both"))
+        meth.update(load_variant(name, ref, Gs, om_all[scene], omb_all[target], spec, zf, "axis"))
         dev = []
         for t in spec["trials"]:
             Tt = np.asarray(t["T_true"]); y = np.degrees(np.arctan2(Tt[1, 0], Tt[0, 0]))
@@ -102,10 +103,12 @@ def main():
                 tabs["conditions"][name] = {"n_trials": 0}; continue
             f = {m: [x for i, x in enumerate(fails(c["meth"][m], m in VARS)) if i in keep] for m in c["meth"]}
             best2 = min(("inner_A", "inner_B"), key=lambda m: (sum(f[m]), VARS.index(m)))
-            best4 = min(VARS, key=lambda m: (sum(f[m]), VARS.index(m)))
-            f["STSL_best2"], f["STSL_best4"] = f[best2], f[best4]
-            ent = {"n_trials": len(keep), "best2": best2, "best4": best4, "n_big_fail": {m: sum(v) for m, v in f.items()}, "pairs": {}}
-            for a, b in (("planA", "STSL_best2"), ("planA", "STSL_best4"), ("planA_fixed", "STSL_best4")):
+            best4 = min(VARS[:4], key=lambda m: (sum(f[m]), VARS.index(m)))
+            best6 = min(VARS, key=lambda m: (sum(f[m]), VARS.index(m)))
+            f["STSL_best2"], f["STSL_best4"], f["STSL_best6"] = f[best2], f[best4], f[best6]
+            ent = {"n_trials": len(keep), "best2": best2, "best4": best4, "best6": best6, "n_big_fail": {m: sum(v) for m, v in f.items()}, "pairs": {}}
+            for a, b in (("planA", "STSL_best2"), ("planA", "STSL_best4"), ("planA_fixed", "STSL_best4"),
+                         ("planA", "STSL_best6"), ("planA_fixed", "STSL_best6")):
                 n10 = sum(x and not y for x, y in zip(f[a], f[b])); n01 = sum(y and not x for x, y in zip(f[a], f[b]))
                 ent["pairs"][a + "_vs_" + b] = {"n10": n10, "n01": n01, "p": mcnemar(n10, n01)}
                 tabs["pairs"][a + "_vs_" + b]["n10"] += n10; tabs["pairs"][a + "_vs_" + b]["n01"] += n01
@@ -128,8 +131,8 @@ def main():
                         ("chosen_correct", "prep_failed", "no_candidate", "correct_existed_other_chosen", "no_correct_candidate")}}
         print(v, res["stsl_variants"][v], flush=True)
     res["dev"] = {n: c["dev"] for n, c in conds.items()}
-    json.dump(res, open("Registration/output/diag/r46/r46_score_b.json", "w"), ensure_ascii=False, default=float)
-    print("wrote Registration/output/diag/r46/r46_score_b.json")
+    json.dump(res, open("Registration/output/diag/r46/r46_score_b3.json", "w"), ensure_ascii=False, default=float)
+    print("wrote Registration/output/diag/r46/r46_score_b3.json")
 
 
 if __name__ == "__main__":

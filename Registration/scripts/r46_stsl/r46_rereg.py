@@ -4,7 +4,8 @@
 BIM を `<参照>_both`（`r46_stsl_bim.py both`）にして `r46_stsl_pipeline.register` を呼ぶ。
 結果：`results/real_<target>_r<r>/<設定>_k<k>_<参照>_both.jsonl`
 ハッシュ表の作成が並列で重ならないよう、各（参照・設定）の最初の 1 組は順に回し、残りを並列にする。
-使い方：python r46_rereg.py [並列数]
+使い方：python r46_rereg.py [並列数] [変種 both|axis（既定 both）]
+B3（§11-2）：変種 axis で、壁の基準線の BIM（`r46_stsl_bim_axis.py`）を使う。
 """
 import json, os, sys
 from multiprocessing import Pool
@@ -14,7 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import r46_stsl_pipeline as pl                                   # noqa: E402  （STSL の位置へ chdir し、LiBIM_UST_ROOT を設定する）
 
 ROOT = pl.ROOT
-FLOOR = {"E2": "M3_411_both", "E3": "M3_410_411_both"}
+VARIANT = sys.argv[2] if len(sys.argv) > 2 else "both"
+FLOOR = {"E2": "M3_411_" + VARIANT, "E3": "M3_410_411_" + VARIANT}
 SETS = ["real_m3_cor_%s__%s_r%s" % (s, e, c) for s in "abcd" for e in ("E2", "E3") for c in ("0p5", "3", "8", "inf")]
 
 
