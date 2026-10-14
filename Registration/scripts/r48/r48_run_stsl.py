@@ -7,7 +7,7 @@
 - 参照（BIM）ごとのハッシュ表は最初の登録で作られるので、参照ごとに最初の 1 組だけ先に回し（参照どうしは並列）、残りを並列にする
 使い方：python r48_run_stsl.py [並列数]
 """
-import json, os, random, sys, time
+import json, os, random, shutil, sys, time
 import multiprocessing as mp
 
 os.environ["R46_STSL_ROOT"] = os.path.expanduser("~/rizu/r48_data/")
@@ -42,6 +42,9 @@ def job(a):
             continue
         seq, seq_dir, T_trues, trp = pl.prep(setname, "A", k)
         pl.register(setname, "A", k, seq, seq_dir, T_trues, trp, floor)
+        # 2026-10-14 追記（実行の途中で C: が埋まり WSL が止まったため）：前処理の入力の点群と平面分割の出力（`<seq>/`）は
+        # 登録の後に使わないので消す（R46 段階3 と同じ）。採点に使う T_rp（`processed/<seq>/30m/T_rp.json`）と結果は残す
+        shutil.rmtree(os.path.join(ROOT, seq), ignore_errors=True)
     return a
 
 
