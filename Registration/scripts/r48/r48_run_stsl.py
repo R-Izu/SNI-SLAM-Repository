@@ -24,6 +24,7 @@ for _try in range(20):
 import r48_common as C                                                  # noqa: E402
 
 ROOT = pl.ROOT
+SHM = "/dev/shm/r48seq"
 K = 5
 
 
@@ -40,11 +41,18 @@ def job(a):
     for k in range(1, K + 1):
         if os.path.exists(os.path.join(ROOT, "results", setname, "A_k%d_%s.jsonl" % (k, floor))):
             continue
+        # 2026-10-14 追記（実行の途中で C: が埋まり WSL が止まったため）：前処理の入力の点群と平面分割の出力（`<seq>/`）は
+        # メモリ上（/dev/shm）に置き、登録の後に消す（WSL の仮想ディスクは書いて消すたびに C: 上で大きくなり、動いている間は縮まない）。
+        # `<seq>/` の中身・置き場所以外は変えない。採点に使う T_rp（`processed/<seq>/30m/T_rp.json`）と結果は仮想ディスクに残す
+        seq = "%s_A_k%d" % (setname, k); link = os.path.join(ROOT, seq); tgt = os.path.join(SHM, seq)
+        if os.path.islink(link):
+            os.unlink(link)
+        elif os.path.isdir(link):
+            shutil.rmtree(link)                      # 止まった前回の実行の残り
+        shutil.rmtree(tgt, ignore_errors=True); os.makedirs(tgt); os.symlink(tgt, link)
         seq, seq_dir, T_trues, trp = pl.prep(setname, "A", k)
         pl.register(setname, "A", k, seq, seq_dir, T_trues, trp, floor)
-        # 2026-10-14 追記（実行の途中で C: が埋まり WSL が止まったため）：前処理の入力の点群と平面分割の出力（`<seq>/`）は
-        # 登録の後に使わないので消す（R46 段階3 と同じ）。採点に使う T_rp（`processed/<seq>/30m/T_rp.json`）と結果は残す
-        shutil.rmtree(os.path.join(ROOT, seq), ignore_errors=True)
+        shutil.rmtree(tgt, ignore_errors=True); os.unlink(link)
     return a
 
 
