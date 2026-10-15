@@ -53,6 +53,17 @@ class ProposedNoGravity(Proposed):
                                 tracer)
 
 
+@register_method("proposed_no_wall_yaw")
+class ProposedNoWallYaw(Proposed):
+    """R49 §8-2-1：壁の向きからのヨーの候補なし（重力は残し、0° から 10° おきの 36 向き）。"""
+    name = "proposed_no_wall_yaw"
+
+    def register(self, src: LabeledCloud, dst: LabeledCloud, cfg: Dict,
+                 tracer: Optional[Tracer] = None) -> np.ndarray:
+        return super().register(src, dst, _with_ablation(cfg, yaw_grid_deg=10.0),
+                                tracer)
+
+
 @register_method("proposed_fixed_scale")
 class ProposedFixedScale(Proposed):
     name = "proposed_fixed_scale"

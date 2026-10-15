@@ -312,6 +312,17 @@ class Proposed(BaseRegistration):
         # --- stage 1: plane-seeded search -> reliable yaw R and scale s ----------
         candidates: List[np.ndarray] = rotation.relative_rotation_candidates(
             src_p, dst_p, cfg)
+        # R49 §8-2-1 アブレーション `yaw_grid_deg`＝**壁の向きからのヨーの候補を外す**（重力は残す）。
+        # 重力で上を揃えた座標（水平の基底は壁に合わせず `_horizontal_basis` の固定の向き）で、
+        # 0° から yaw_grid_deg おきの向きを候補にする。相関・短い精緻化・採点・選択は完全な方式と同じ。
+        if abl.get("yaw_grid_deg"):
+            def _grav_frame(cloud):
+                up = rotation.estimate_gravity_axis(cloud, cfg)
+                e1, e2 = rotation._horizontal_basis(up)
+                return np.stack([e1, e2, up], axis=0)
+            Rs_g, Rr_g = _grav_frame(src_p), _grav_frame(dst_p)
+            candidates = [Rr_g.T @ rotation._rot_z(np.deg2rad(a)) @ Rs_g
+                          for a in np.arange(0.0, 360.0, float(abl["yaw_grid_deg"]))]
         _ins_rot.__exit__(None, None, None)
         # R5 §2-5 / Q3: record which Manhattan candidate won and by how much.
         # T3 showed the failure mode is picking the *wrong* candidate (66% of
@@ -396,6 +407,8 @@ class Proposed(BaseRegistration):
                 # score" cannot be told apart (R11 §3).
                 cand_T.append(np.asarray(T, dtype=np.float64).tolist())
             if score > best_score:
+                if _ins.ACTIVE is not None:      # R49：勝った候補の番号（通常の精緻化の何回目か）
+                    _ins.ACTIVE["winner_index"] = len(cand_R) - 1
                 best_score = score
                 plane_T = T
                 plane_trace = cand_tracer
