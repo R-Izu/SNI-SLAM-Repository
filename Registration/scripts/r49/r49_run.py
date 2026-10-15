@@ -137,11 +137,11 @@ def save(data, m, target, d):
     json.dump(d, open(path(data, m, target), "w"))
 
 
-def serial():
+def serial(datas=("synth", "bim", "real")):
     env = {k: os.environ.get(k) for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")}
     env["affinity"] = sorted(os.sched_getaffinity(0)); env["cpu_count"] = os.cpu_count()
-    json.dump(env, open(os.path.join(OUT, "serial_env.json"), "w"))
-    for data in ("synth", "bim", "real"):
+    json.dump(env, open(os.path.join(OUT, "serial_env_%s.json" % "_".join(datas)), "w"))
+    for data in datas:
         for target in targets(data):
             Ps = perturbations(data, target)
             done = {m: load(data, m, target) for m in ("full", "single")}
@@ -159,13 +159,27 @@ def pjob(a):
     return a, run_one(data, target, m, k, perturbations(data, target)[k], False)
 
 
-def parallel(npar, s6):
-    if s6:
-        jobs = [("synth", t, "nowall", k) for t in SYNTH for k in range(10)]
-    else:
-        jobs = [("synth", t, "nowall", k) for t in SYNTH for k in range(100)] + [("real", t, "nowall", k) for t in REAL for k in range(10)]
-        jobs += [(d, t, "admit", k) for d in ("synth", "bim", "real") for t in targets(d) for k in range(n_trials(d))]
-        jobs += [("real", t, m, k) for t in REAL for m in ("nograv", "fpfh_p2p", "fpfh_p2l", "fgr_p2p", "fgr_p2l") for k in range(10)]
+def job_set(name):
+    """§9 の順番で回すための組（2026-10-15 追記。中身は §3 のまま）"""
+    if name == "s6":
+        return [("synth", t, "nowall", k) for t in SYNTH for k in range(10)]
+    if name == "probe":                                    # §9-1：S6 で回していない trial 10・11
+        return [("synth", t, "nowall", k) for t in SYNTH for k in (10, 11)]
+    if name == "nowall_synth":
+        return [("synth", t, "nowall", k) for t in SYNTH for k in range(100)]
+    if name == "nowall_real":
+        return [("real", t, "nowall", k) for t in REAL for k in range(10)]
+    if name == "descriptive":
+        return ([(d, t, "admit", k) for d in ("synth", "bim", "real") for t in targets(d) for k in range(n_trials(d))]
+                + [("real", t, m, k) for t in REAL for m in ("nograv", "fpfh_p2p", "fpfh_p2l", "fgr_p2p", "fgr_p2l") for k in range(10)])
+    raise ValueError(name)
+
+
+def parallel(npar, setname, out_override=None):
+    global OUT
+    if out_override:
+        OUT = out_override
+    jobs = job_set(setname)
     have = {}
     todo = []
     for a in jobs:
@@ -185,7 +199,9 @@ def parallel(npar, s6):
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
+    # 使い方：serial [synth,bim,real] ／ parallel <並列数> <組> [--out <置き場所>]
     if sys.argv[1] == "serial":
-        serial()
+        serial(tuple(sys.argv[2].split(",")) if len(sys.argv) > 2 else ("synth", "bim", "real"))
     else:
-        parallel(int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 8, "--s6" in sys.argv)
+        out = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else None
+        parallel(int(sys.argv[2]), sys.argv[3], out)
