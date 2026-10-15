@@ -10,6 +10,7 @@ have no same-class partner and drop out.
 
 from __future__ import annotations
 
+import time
 from typing import Dict, Optional
 
 import numpy as np
@@ -19,6 +20,7 @@ from .labels import NAME_TO_ID, LabeledCloud
 from .metrics import apply_sim3, decompose_sim3, make_sim3
 from .scale import scale_translation, umeyama
 from .trace import Tracer
+from . import instrument as _ins
 
 
 def _tukey_weights(dist: np.ndarray, c: float) -> np.ndarray:
@@ -61,11 +63,17 @@ def semantic_icp(
     common = sorted(set(src.present_classes()) & set(dst.present_classes())
                     & set(match_ids))
 
+    _rec = _ins.ACTIVE is not None          # R49：計測（オプトイン。計算には触れない）
+    if _rec:
+        _t0 = time.perf_counter()
     # Per-class KD-trees over the destination (built once).
     dst_pts = {c: dst.points[dst.labels == c] for c in common}
     trees = {c: cKDTree(dst_pts[c]) for c in common if len(dst_pts[c]) > 0}
     src_pts = {c: src.points[src.labels == c] for c in common}
 
+    if _rec:
+        _t_tree = time.perf_counter() - _t0
+        _deltas, _ncorr, _resid, _stop = [], [], [], "max"
     T = np.array(init_T, dtype=np.float64)
     R_fixed, _, _ = decompose_sim3(T)
     if tracer is not None:
@@ -76,6 +84,7 @@ def semantic_icp(
         last_it = i
         moved = apply_sim3(T, src.points)
         s_list, d_list, w_list = [], [], []
+        _dl = []
         for c in common:
             if c not in trees or len(src_pts[c]) == 0:
                 continue
@@ -87,12 +96,18 @@ def semantic_icp(
             s_list.append(src.points[sm][keep])
             d_list.append(dst_pts[c][idx[keep]])
             w_list.append(_tukey_weights(dist[keep], tukey_c))
+            if _rec:
+                _dl.append(dist[keep])
         if not s_list:
+            if _rec:
+                _stop = "no_corr"
             break
         src_corr = np.concatenate(s_list, axis=0)
         dst_corr = np.concatenate(d_list, axis=0)
         w = np.concatenate(w_list, axis=0)
         if len(src_corr) < 3 or w.sum() < 1e-9:
+            if _rec:
+                _stop = "few_corr"
             break
 
         if rotation_fixed:
@@ -108,11 +123,23 @@ def semantic_icp(
             T_new = make_sim3(R, t, s)
 
         delta = float(np.linalg.norm(T_new - T))
+        if _rec:
+            _Ro, _to, _so = decompose_sim3(T); _Rn, _tn, _sn = decompose_sim3(T_new)
+            _c = float(np.clip((np.trace(_Rn @ _Ro.T) - 1.0) / 2.0, -1.0, 1.0))
+            _deltas.append({"frob": delta, "rot_deg": float(np.degrees(np.arccos(_c))),
+                            "trans": float(np.linalg.norm(_tn - _to)), "scale_rel": float(abs(_sn / _so - 1.0))})
+            _ncorr.append(int(len(src_corr))); _resid.append(float(np.concatenate(_dl).mean()))
         T = T_new
         if tracer is not None:
             tracer.record(i, T)
         if delta < conv:
+            if _rec:
+                _stop = "conv"
             break
     if tracer is not None:
         tracer.record(last_it, T, force=True)   # guarantee the final pose is logged
+    if _rec:
+        _ins.ACTIVE["icp"].append({"tag": _ins.TAG, "rotation_fixed": bool(rotation_fixed), "max_iter": max_iter,
+                                    "iters": last_it, "stop": _stop, "deltas": _deltas, "n_corr": _ncorr,
+                                    "resid": _resid, "t_tree": _t_tree, "t_total": time.perf_counter() - _t0})
     return T

@@ -45,6 +45,7 @@ from ..semantic_icp import semantic_icp
 from ..trace import Tracer
 from .base import BaseRegistration
 from .. import plan_correlate as _plan_corr
+from .. import instrument as _ins     # R49：段の時間（オプトイン）
 from . import register_method
 
 # Robust span percentiles: trims a few % of stragglers (mislabelled points,
@@ -208,10 +209,11 @@ def _plan_correlate_seeds(src_p, dst_p, rotations, cfg, pcfg):
     """
     from ..semantic_icp import semantic_icp as _sicp
 
-    cands, diag = _plan_corr.generate_candidates(
-        src_p.points, src_p.labels, src_p.normals,
-        dst_p.points, dst_p.labels, dst_p.normals,
-        rotations, NAME_TO_ID, pcfg.get("plan_correlate") or {})
+    with _ins.stage("correlate"):
+        cands, diag = _plan_corr.generate_candidates(
+            src_p.points, src_p.labels, src_p.normals,
+            dst_p.points, dst_p.labels, dst_p.normals,
+            rotations, NAME_TO_ID, pcfg.get("plan_correlate") or {})
 
     thresh = float(cfg["semantic_icp"]["max_corr_dist"])
     # 手順 6：短い精緻化。**2 段階（1.0 m → 0.5 m）**、各 10 反復
@@ -222,10 +224,11 @@ def _plan_correlate_seeds(src_p, dst_p, rotations, cfg, pcfg):
             c2 = {**cfg, "semantic_icp": {**cfg["semantic_icp"],
                                           "max_corr_dist": d, "tukey_c": d,
                                           "max_iter": 10}}
-            T = _sicp(src_p, dst_p, T, c2, rotation_fixed=True)
-        refined.append({**c, "T_short": T,
-                        "score_short": float(class_inlier_ratio(src_p, dst_p, T,
-                                                                thresh))})
+            with _ins.stage("icp", tag="icp_short"):
+                T = _sicp(src_p, dst_p, T, c2, rotation_fixed=True)
+        with _ins.stage("select"):
+            _ss = float(class_inlier_ratio(src_p, dst_p, T, thresh))
+        refined.append({**c, "T_short": T, "score_short": _ss})
     # 手順 7：**向きごとに 1 つ**（枠を潰さない。全体上位を取ると向きが偏る）
     best_per_yaw = {}
     for r in refined:
@@ -257,8 +260,9 @@ class Proposed(BaseRegistration):
 
     def register(self, src: LabeledCloud, dst: LabeledCloud, cfg: Dict,
                  tracer: Optional[Tracer] = None) -> np.ndarray:
-        src_p = preprocess.prepare(src, cfg)
-        dst_p = preprocess.prepare(dst, cfg)
+        with _ins.stage("prep"):
+            src_p = preprocess.prepare(src, cfg)
+            dst_p = preprocess.prepare(dst, cfg)
         thresh = float(cfg["semantic_icp"]["max_corr_dist"])
         abl = cfg.get("ablation") or {}
 
@@ -275,8 +279,9 @@ class Proposed(BaseRegistration):
             c_src = _struct_centroid(src_p.points, src_p.labels, struct_ids)
             c_dst = _struct_centroid(dst_p.points, dst_p.labels, struct_ids)
             init_T = make_sim3(np.eye(3), c_dst - c_src, 1.0)
-            return semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=False,
-                                tracer=tracer)
+            with _ins.stage("icp", tag="icp_free"):
+                return semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=False,
+                                    tracer=tracer)
 
         # Ablation `single_class` = **removal of class-constrained correspondence**
         # (ICP matching and the candidate score stop distinguishing classes).
@@ -295,6 +300,7 @@ class Proposed(BaseRegistration):
         else:
             src_score, dst_score = src_p, dst_p
 
+        _ins_rot = _ins.stage("rotation"); _ins_rot.__enter__()
         axes = canonical_axes(dst_p, cfg)
         dst_span = axis_spans(dst_p.points, dst_p.labels, axes)
         c_dst = _struct_centroid(dst_p.points, dst_p.labels, struct_ids)
@@ -302,6 +308,7 @@ class Proposed(BaseRegistration):
         # --- stage 1: plane-seeded search -> reliable yaw R and scale s ----------
         candidates: List[np.ndarray] = rotation.relative_rotation_candidates(
             src_p, dst_p, cfg)
+        _ins_rot.__exit__(None, None, None)
         # R5 §2-5 / Q3: record which Manhattan candidate won and by how much.
         # T3 showed the failure mode is picking the *wrong* candidate (66% of
         # failures involve rotation, worst excess 175 deg), so the scores that
@@ -372,9 +379,11 @@ class Proposed(BaseRegistration):
             # Each candidate gets its own tracer; only the winner's trajectory
             # is surfaced, so the reported curve is a single coherent ICP run.
             cand_tracer = Tracer(tracer.stride) if tracer is not None else None
-            T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True,
-                             tracer=cand_tracer)
-            score = class_inlier_ratio(src_score, dst_score, T, thresh)
+            with _ins.stage("icp", tag="icp_normal"):
+                T = semantic_icp(src_p, dst_p, init_T, cfg, rotation_fixed=True,
+                                 tracer=cand_tracer)
+            with _ins.stage("select"):
+                score = class_inlier_ratio(src_score, dst_score, T, thresh)
             if record_yaw:
                 cand_scores.append(float(score))
                 # Each candidate's post-ICP pose, not just its score. From the
@@ -411,13 +420,15 @@ class Proposed(BaseRegistration):
         c_src_win = _struct_centroid(src_p.points @ R_win.T, src_p.labels, struct_ids)
         refine_T0 = make_sim3(R_win, c_dst - s_win * c_src_win, s_win)
         refine_trace = Tracer(tracer.stride) if tracer is not None else None
-        refine_T = semantic_icp(src_p, dst_p, refine_T0, cfg, rotation_fixed=True,
-                                tracer=refine_trace)
+        with _ins.stage("icp", tag="icp_refine"):
+            refine_T = semantic_icp(src_p, dst_p, refine_T0, cfg, rotation_fixed=True,
+                                    tracer=refine_trace)
 
         # Pick by chamfer: safe here because both poses share the locked (R, s)
         # and differ only in translation basin (no cross-yaw/scale ambiguity).
-        cand = [(_chamfer(plane_T, src_p, dst_p), plane_T, plane_trace),
-                (_chamfer(refine_T, src_p, dst_p), refine_T, refine_trace)]
+        with _ins.stage("select"):
+            cand = [(_chamfer(plane_T, src_p, dst_p), plane_T, plane_trace),
+                    (_chamfer(refine_T, src_p, dst_p), refine_T, refine_trace)]
         if translation_init == "plan_correlate":
             # R29 §2-2：**勝者決定後の重心再初期化を、案A の主経路には入れない。**
             # 被覆が違うとき重心そのものがずれるので、案A が選んだ位置を
