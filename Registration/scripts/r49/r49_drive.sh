@@ -6,7 +6,6 @@
 # 3. 壁の向きからのヨーの候補なし：合成の残り
 # 4. 同：実データ（並列）。完全・クラス別なし：対照・実データ（1 本ずつ）
 # 5. 記述だけのもの（非構造物を入れる、実データの物理拘束なし・ラベルを使わない 4 方式）
-set -u
 source /opt/miniconda/3/etc/profile.d/conda.sh && conda activate sni-slam
 cd ~/rizu/SNI-SLAM
 L=~/rizu/r49_data/logs; mkdir -p $L
