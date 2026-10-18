@@ -292,7 +292,8 @@ class Proposed(BaseRegistration):
         # It is NOT "no semantic information": labels still drive the gravity /
         # Manhattan estimation, the per-class extents and the structural-point
         # selection below. Do not report it as a semantics ablation (R7 §7).
-        if abl.get("single_class"):
+        # R50 §3-1：`score_single_class` は最終の採点 ρ だけでクラスをまとめる（`single_class` と同じまとめ方）
+        if abl.get("single_class") or abl.get("score_single_class"):
             match_ids = [NAME_TO_ID[n] for n in cfg["classes"]["match_classes"]]
             one = match_ids[0]
             src_score = LabeledCloud(

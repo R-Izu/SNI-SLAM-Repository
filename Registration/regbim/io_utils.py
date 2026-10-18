@@ -39,6 +39,28 @@ def load_source_cloud(cfg: Dict) -> LabeledCloud:
     raise ValueError(f"unknown source type: {spec['type']}")
 
 
+def geometric_reference_classes(cloud: LabeledCloud) -> LabeledCloud:
+    """R50 §3-2：参照の点のクラスを、法線と +z の角 θ と高さだけから作り直す。
+
+    θ ≤ 20° または θ ≥ 160° を水平とし、z が参照の点の z の最小と最大の中点より下なら床、上なら天井。
+    70° ≤ θ ≤ 110° を壁。それ以外は background。扉・窓のクラスは使わない。元のクラスは meta に残す。
+    """
+    if cloud.normals is None:
+        raise ValueError("reference.geometric_classes needs reference normals")
+    n = np.asarray(cloud.normals, dtype=np.float64)
+    nz = n[:, 2] / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
+    theta = np.degrees(np.arccos(np.clip(nz, -1.0, 1.0)))
+    z = np.asarray(cloud.points)[:, 2]
+    zmid = 0.5 * (float(z.min()) + float(z.max()))
+    horiz = (theta <= 20.0) | (theta >= 160.0)
+    lab = np.zeros(len(z), dtype=np.asarray(cloud.labels).dtype)
+    lab[horiz & (z < zmid)] = NAME_TO_ID["floor"]
+    lab[horiz & (z >= zmid)] = NAME_TO_ID["ceiling"]
+    lab[(theta >= 70.0) & (theta <= 110.0)] = NAME_TO_ID["wall"]
+    return LabeledCloud(points=cloud.points, labels=lab, normals=cloud.normals,
+                        meta=dict(cloud.meta, geometric_classes=True, original_labels=np.asarray(cloud.labels).copy()))
+
+
 def load_reference_cloud(cfg: Dict) -> LabeledCloud:
     """Dispatch on ``cfg['reference']['type']``.
 
@@ -72,6 +94,10 @@ def load_reference_cloud(cfg: Dict) -> LabeledCloud:
         cloud = cloud.subset(inner)
         cloud.meta = dict(cloud.meta, inner_only=True,
                           n_points_after_inner_only=int(len(cloud)))
+
+    # R50 §3-2：参照のクラスを幾何から作る（既定 off）
+    if spec.get("geometric_classes"):
+        cloud = geometric_reference_classes(cloud)
 
     # Partial-coverage study (R3 T3). Absent in every existing config, and a
     # no-op when absent, so previous results are unaffected.

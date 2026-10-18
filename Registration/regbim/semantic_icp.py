@@ -56,7 +56,9 @@ def semantic_icp(
     with_scaling = bool(icfg["with_scaling"])
 
     match_ids = [NAME_TO_ID[n] for n in cfg["classes"]["match_classes"]]
-    if (cfg.get("ablation") or {}).get("single_class"):
+    _abl = cfg.get("ablation") or {}
+    # R50 §3-1：`icp_single_class` は ICP の対応づけだけでクラスをまとめる（`single_class` と同じまとめ方）
+    if _abl.get("single_class") or _abl.get("icp_single_class"):
         # Ablation (proposed_no_semantic): collapse every matchable class into a
         # single bucket so correspondences ignore labels. Background still drops
         # out (it is not in match_ids), isolating the multi-class constraint.
