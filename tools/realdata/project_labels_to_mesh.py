@@ -83,6 +83,8 @@ def main() -> int:
     ap.add_argument("--config", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--frame-stride", type=int, default=5)
+    ap.add_argument("--frame-end-frac", type=float, default=1.0,
+                    help="R52：全フレームの番号の最初の f の割合だけ使う（range(0, ceil(n f), stride)）。既定 1.0 は従来どおり")
     ap.add_argument("--depth-tol", type=float, default=0.12,
                     help="頂点の z と実測 depth の許容差 [m]（オクルージョン判定）")
     ap.add_argument("--weight-by-normal", action="store_true",
@@ -112,7 +114,7 @@ def main() -> int:
     sem_paths = sorted(glob.glob(os.path.join(args.scene_dir, "semantic_class",
                                               "semantic_class_*.png")), key=frame_no)
     n = min(len(c2w), len(depth_paths), len(sem_paths))
-    idxs = list(range(0, n, args.frame_stride))
+    idxs = list(range(0, int(np.ceil(n * args.frame_end_frac)), args.frame_stride))
     print("using %d of %d frames (stride %d)" % (len(idxs), n, args.frame_stride))
 
     # 生ID -> index の変換表
@@ -190,6 +192,7 @@ def main() -> int:
         "mesh_in": args.mesh, "mesh_out": args.out, "scene_dir": args.scene_dir,
         "n_vertices": int(len(V)), "n_frames_used": len(idxs),
         "frame_stride": args.frame_stride, "depth_tol_m": args.depth_tol,
+        "frame_end_frac": args.frame_end_frac, "n_frames_total": n,
         "weight_by_normal": bool(args.weight_by_normal),
         # 「どの depth 観測からも depth_tol 以内に無い頂点」の割合は、
         # 再構成が観測にどれだけ支持されているかの直接の指標になる

@@ -55,6 +55,8 @@ def main() -> int:
     ap.add_argument("--sdf-trunc", type=float, default=0.12,
                     help="切り捨て距離。慣例的にボクセル長の 3 倍")
     ap.add_argument("--frame-stride", type=int, default=2)
+    ap.add_argument("--frame-end-frac", type=float, default=1.0,
+                    help="R52：全フレームの番号の最初の f の割合だけ使う（range(0, ceil(n f), stride)）。既定 1.0 は従来どおり")
     ap.add_argument("--max-depth", type=float, default=5.0,
                     help="採用する depth の上限。変換時と同じ 5 m")
     ap.add_argument("--poses", default="traj", choices=["traj", "ckpt"],
@@ -81,7 +83,7 @@ def main() -> int:
     rgbs = sorted(glob.glob(os.path.join(args.scene_dir, "rgb", "rgb_*.png")), key=frame_no)
     deps = sorted(glob.glob(os.path.join(args.scene_dir, "depth", "depth_*.png")), key=frame_no)
     n = min(len(c2w), len(rgbs), len(deps))
-    idxs = list(range(0, n, args.frame_stride))
+    idxs = list(range(0, int(np.ceil(n * args.frame_end_frac)), args.frame_stride))
     print("TSDF: %d of %d frames, voxel %.3f m, trunc %.3f m"
           % (len(idxs), n, args.voxel, args.sdf_trunc))
 
@@ -118,6 +120,7 @@ def main() -> int:
         "scene_dir": args.scene_dir, "out": args.out, "poses": args.poses,
         "voxel_m": args.voxel, "sdf_trunc_m": args.sdf_trunc,
         "frame_stride": args.frame_stride, "n_frames_used": len(idxs),
+        "frame_end_frac": args.frame_end_frac, "n_frames_total": n,
         "max_depth_m": args.max_depth,
         "n_vertices": int(len(mesh.vertices)), "n_triangles": int(len(mesh.triangles)),
         "elapsed_s": round(el, 1),
