@@ -244,7 +244,7 @@ def summary():
         if ref != "E2" or f not in ("0p2", "0p4", "0p6"):
             continue
         r3 = real[(f, scan, k, "E3")]
-        a2 = (not r["main"]["g"]) and (not r["main"]["s"]); a3 = (not r3["main"]["g"]) and (not r3["main"]["s"])
+        a2 = r["main"]["class"] == "make" and not r["main"]["s"]; a3 = r3["main"]["class"] == "make" and not r3["main"]["s"]
         cell = "both" if a2 and a3 else ("E2_only" if a2 else ("E3_only" if a3 else "neither"))
         for g in ("%s|all" % f, "%s|%s" % (f, scan), "0p2-0p6|all", "0p2-0p6|%s" % scan):
             acc.setdefault(g, Counter())[cell] += 1
