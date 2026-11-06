@@ -79,7 +79,7 @@ def records(target, f):
 def job(a):
     target, f = a
     scan, ref = target.split("__")
-    G = np.asarray(real_criteria(scan)["1"], dtype=np.float64)
+    G = np.asarray(real_criteria(scan)[1], dtype=np.float64)
     om = np.load("Registration/output/diag/omega.npz")[scan]; omb = np.load("Registration/output/diag/r39_omega_bim.npz")[target]
     cfg = C.cfg_of(target, f)
     src = io_utils.load_source_cloud(cfg); dst = io_utils.load_reference_cloud(cfg)

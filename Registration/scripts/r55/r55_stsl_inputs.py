@@ -16,7 +16,7 @@ from r36_rotation_diag import tilt_yaw                          # noqa: E402
 def main():
     check = []
     for target in C.RR.REAL:
-        G1 = np.asarray(real_criteria(target.split("__")[0])["1"], dtype=np.float64)
+        G1 = np.asarray(real_criteria(target.split("__")[0])[1], dtype=np.float64)
         for f in C.FS:
             src = io_utils.load_source_cloud(C.cfg_of(target, f))
             out = os.path.join(C.STSL_ROOT, "inputs", "r55_%s_f%s" % (target, f)); os.makedirs(out, exist_ok=True)
