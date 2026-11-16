@@ -4,6 +4,7 @@
 - 成分：Ω の点 x について d = (T P_eff) x − A x（IFC の座標）。鉛直 = d_z、水平 = (d_x, d_y)。
   それぞれの 2 乗平均の平方根（rms_z・rms_xy、rms_z² + rms_xy² = e_Ω²）と d_z の平均
 - 段階：gen・short・after_icp の候補のうち E_Ω 最小の候補（b）と、基準内（e_R < 45°・e_Ω < 1.0 m）の候補があるか
+- 全候補の d_z の平均（`mean_dz_all_<段階>`）
 - 高さ：入力 b-2 f1p0 の床・天井のラベルの点を A で IFC に置いた z と、参照の床・天井の点の z（`prepare` の後）。0.1 m の区間の数の多い順の上位 3 区間
 出力：`~/rizu/r63_data/condA_s5.json`
 """
@@ -58,6 +59,7 @@ def main():
             for st, Ts in (("gen", d["gen"]), ("short", d["short"]), ("after", d["after_icp"])):
                 es = [ev(T, P) for T in Ts]; i = int(np.argmin([e["eO"] for e in es]))
                 t["b_" + st] = dict(es[i], idx=i); t["any_ok_" + st] = any(e["ok"] for e in es); t["n_" + st] = len(es)
+                t["mean_dz_all_" + st] = [e.get("mean_dz") for e in es]
             out.append(t)
         res["trials"][ref] = out
         cfg = yaml.safe_load(open("Registration/configs/conslam/b2_f1p0__%s.yaml" % ref))
@@ -74,6 +76,10 @@ def main():
                   "| b gen %.2f short %.2f after %.2f" % (t["b_gen"]["eO"], t["b_short"]["eO"], t["b_after"]["eO"]),
                   "ok", t["any_ok_gen"], t["any_ok_short"], t["any_ok_after"], "| b_after rms_z %.3f" % t["b_after"].get("rms_z", np.nan))
     print(json.dumps(res["heights"], indent=1))
+    for st in ("gen", "short", "after"):
+        v = [x for ref in REFS for t in res["trials"][ref] for x in t["mean_dz_all_" + st] if x is not None]
+        print(st, "all candidates mean_dz: n", len(v), "median %.3f p5 %.3f p95 %.3f min %.3f max %.3f" % (np.median(v), np.percentile(v, 5), np.percentile(v, 95), min(v), max(v)),
+              "frac |dz|<0.5: %.3f" % np.mean(np.abs(v) < 0.5))
 
 
 if __name__ == "__main__":
