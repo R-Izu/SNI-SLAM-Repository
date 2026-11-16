@@ -36,7 +36,9 @@ OM = np.load(os.path.join(CO, "r62_omega.npz"))
 def jobs(stage):
     if stage == "s5":
         return [("full", "b2", "1p0", r, k) for r in REFS for k in range(10)]
-    js = [("full", i, f, r, k) for i in ("b2", "b1") for f in FS for r in REFS for k in range(10) if not (i == "b2" and f == "1p0")]
+    if stage == "b1f1":                    # R63 §7-2 の 2：b-1・f 1.0・完全の 40 試行（2026-11-17 追加）
+        return [("full", "b1", "1p0", r, k) for r in REFS for k in range(10)]
+    js =[("full", i, f, r, k) for i in ("b2", "b1") for f in FS for r in REFS for k in range(10) if not (i == "b2" and f == "1p0")]
     js += [(m, "b2", f, r, k) for m in ("score_only", "icp_only") for f in ("1p0", "0p6") for r in REFS for k in range(10)]
     return js
 
