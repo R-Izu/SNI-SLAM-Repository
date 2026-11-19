@@ -24,13 +24,16 @@ from failure_decomposition import provenance                   # noqa: E402
 from r41_rescore import per_trial                              # noqa: E402
 import r49_run as RR                                           # noqa: E402
 
-OUT = os.path.expanduser("~/rizu/r63_data/results")
+# R63 §8（2026-11-20 追加）：環境変数 R63_TAG=fix で、直した入力・参照（`configs/conslam_fix/`・`r63fix_omega.npz`）を使い、`results_fix/` に書く
+TAG = os.environ.get("R63_TAG", "")
+CFGD = "Registration/configs/conslam" + ("_" + TAG if TAG else "")
+OUT = os.path.expanduser("~/rizu/r63_data/results" + ("_" + TAG if TAG else ""))
 CO = os.path.expanduser("~/rizu/conslam/out")
 REFS = ["S1_small", "S1_large", "S3_small", "S3_large"]
 FS = ["0p2", "0p4", "0p6", "0p8", "1p0"]
 PS = [np.asarray(P, dtype=np.float64) for P in RR.perturbations("real", "m3_cor_a__E2")]
 A = np.array(json.load(open(os.path.join(CO, "extra.json")))["b_normalized"]["A"])
-OM = np.load(os.path.join(CO, "r62_omega.npz"))
+OM = np.load(os.path.join(CO, "r63fix_omega.npz" if TAG == "fix" else "r62_omega.npz"))
 
 
 def jobs(stage):
@@ -44,7 +47,7 @@ def jobs(stage):
 
 
 def config(m, inp, f, ref):
-    cfg = yaml.safe_load(open("Registration/configs/conslam/%s_f%s__%s.yaml" % (inp, f, ref)))
+    cfg = yaml.safe_load(open(CFGD + "/%s_f%s__%s.yaml" % (inp, f, ref)))
     if m == "score_only":
         cfg["ablation"] = {"score_single_class": True}
     elif m == "icp_only":

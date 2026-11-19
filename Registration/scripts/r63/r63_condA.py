@@ -28,12 +28,15 @@ from r41_rescore import per_trial                              # noqa: E402
 from r36_rotation_diag import tilt_yaw                         # noqa: E402
 import r49_run as RR                                           # noqa: E402
 
-OUT = os.path.expanduser("~/rizu/r63_data/resultsA")
+# R63 §8（2026-11-20 追加）：環境変数 R63_TAG=fix で、直した入力・参照（`configs/conslam_fix/`・`r63fix_omega.npz`）を使い、`resultsA_fix/` に書く
+TAG = os.environ.get("R63_TAG", "")
+CFGD = "Registration/configs/conslam" + ("_" + TAG if TAG else "")
+OUT = os.path.expanduser("~/rizu/r63_data/resultsA" + ("_" + TAG if TAG else ""))
 CO = os.path.expanduser("~/rizu/conslam/out")
 REFS = ["S1_small", "S1_large", "S3_small", "S3_large"]
 A = np.array(json.load(open(os.path.join(CO, "extra.json")))["b_normalized"]["A"])
 Rg = np.array(json.load(open(os.path.join(CO, "r62_stsl.json")))["Rg"])
-OM = np.load(os.path.join(CO, "r62_omega.npz"))["omega_b2"]
+OM = np.load(os.path.join(CO, "r63fix_omega.npz" if TAG == "fix" else "r62_omega.npz"))["omega_b2"]
 PS = [np.asarray(P, dtype=np.float64) for P in RR.perturbations("real", "m3_cor_a__E2")]
 
 
@@ -52,7 +55,7 @@ def jobs(stage):
 
 
 def config(m, f, ref):
-    cfg = yaml.safe_load(open("Registration/configs/conslam/b2_f%s__%s.yaml" % (f, ref)))
+    cfg = yaml.safe_load(open(CFGD + "/b2_f%s__%s.yaml" % (f, ref)))
     p = cfg.setdefault("proposed", {}); p["translation_init"] = "plan_correlate"; p["plan_correlate"] = {"scale_lo": 1.0, "scale_hi": 1.0, "scale_n": 1}
     if m == "score_only":
         cfg["ablation"] = {"score_single_class": True}
