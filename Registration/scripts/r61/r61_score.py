@@ -12,7 +12,8 @@ comp（§3-3）：`r61_data/comp/<成分>/` と摂動なし（`comp/none`）。P
 - 候補の照合（指示書 §3-3 の固定の線）：各段階の候補を元の座標に戻し（T P）、摂動なしの候補（T）と、回転の差 ≤ 2° かつ並進の差 ≤ 0.3 m で対応を取る
 - 1：最終の基準内が摂動なしと違う試行の数。2：その試行で (i) gen の候補に対応の取れないものがあるか（数）、(ii) gen はすべて対応が取れ、
   after_icp の 4 候補もすべて対応が取れ、採点の 1 位の候補が摂動なしと別の候補か。3：段階ごとの b（E_Ω 最小）の摂動なしとの差。4：前処理の後の点の数の差
-出力：`~/rizu/r61_data/score_<s31|rerun|comp>.json`
+rerun_pairs（§3-2 の追加、2026-11-20）：同じ設定の 3 回どうし（r1 と r2、r1 と r3、r2 と r3）の `T_est` のビット一致の数と、R49 の記録と一致しない試行の段階ごとの差の分布
+出力：`~/rizu/r61_data/score_<s31|rerun|rerun_pairs|comp>.json`
 """
 import json, os, sys
 from collections import Counter, defaultdict
@@ -170,5 +171,30 @@ def comp():
     json.dump(res, open(OUT + "/score_comp.json", "w"), indent=1, default=float)
 
 
+def rerun_pairs():
+    res = {}
+    for st in ("serial", "parallel"):
+        runs = {r: {t: json.load(open("%s/rerun/%s_r%d/%s.json" % (OUT, st, r, t)))["rows"] for t in RR.REAL} for r in (1, 2, 3)}
+        for a, b in ((1, 2), (1, 3), (2, 3)):
+            n = eq = 0; mx = 0.0
+            for t in RR.REAL:
+                for k in range(10):
+                    A, B = np.asarray(runs[a][t][str(k)]["T_est"]), np.asarray(runs[b][t][str(k)]["T_est"]); n += 1
+                    if np.array_equal(A, B):
+                        eq += 1
+                    else:
+                        mx = max(mx, float(np.abs(A - B).max()))
+            res["%s r%d-r%d" % (st, a, b)] = {"n": n, "bit_equal": eq, "max_diff": mx}
+            print(st, a, b, n, eq, "%.3e" % mx)
+    d = json.load(open(OUT + "/score_rerun.json"))
+    for name in ("parallel_r1", "parallel_r2", "parallel_r3"):
+        ms = d[name]["mismatch"]; out = {}
+        for st in ("gen", "short", "after_icp", "T_est"):
+            v = [m[st] for m in ms if isinstance(m[st], float)]
+            out[st] = {"n": len(v), "median": float(np.median(v)), "max": float(max(v)), "n_zero": sum(x == 0 for x in v)}
+        res[name + "_stage_diff"] = out; print(name, out)
+    json.dump(res, open(OUT + "/score_rerun_pairs.json", "w"), indent=1)
+
+
 if __name__ == "__main__":
-    {"s31": s31, "rerun": rerun, "comp": comp}[sys.argv[1]]()
+    {"s31": s31, "rerun": rerun, "rerun_pairs": rerun_pairs, "comp": comp}[sys.argv[1]]()
