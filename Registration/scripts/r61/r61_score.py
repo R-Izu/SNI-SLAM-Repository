@@ -8,7 +8,7 @@ s31（§3-1、記録だけ）：R49 の完全・実データ・f 1.0（`r49_data
 - 選択で失った試行（class = select）：after_icp の 4 候補のうち基準内の候補の、採点の順位（1 が最上位）と 1 位との差
 rerun（§3-2）：`r61_data/rerun/<設定>_r<n>/` の各試行と R49 の記録
 - `T_est` がビット一致（`np.array_equal`）する試行の数。一致しない試行の、段階ごとの候補（gen・short・after_icp）と T_est の要素の差の最大、最終の基準内が変わった試行の数
-comp（§3-3）：`r61_data/comp/<成分>/` と摂動なし（`comp/none`）。P_k（全部の成分）は R49 の記録
+comp（§3-3）：`r61_data/comp/<成分>/` と摂動なし（`comp/none`）。P_k（全部の成分）は §3-2 の 10 並列の記録 `rerun/parallel_r1`（R61 §7-2：比べる相手を同じ 10 並列にそろえる。前処理の後の点の数はここで `r61_run.n_prep` で数える）
 - 候補の照合（指示書 §3-3 の固定の線）：各段階の候補を元の座標に戻し（T P）、摂動なしの候補（T）と、回転の差 ≤ 2° かつ並進の差 ≤ 0.3 m で対応を取る
 - 1：最終の基準内が摂動なしと違う試行の数。2：その試行で (i) gen の候補に対応の取れないものがあるか（数）、(ii) gen はすべて対応が取れ、
   after_icp の 4 候補もすべて対応が取れ、採点の 1 位の候補が摂動なしと別の候補か。3：段階ごとの b（E_Ω 最小）の摂動なしとの差。4：前処理の後の点の数の差
@@ -20,7 +20,7 @@ from collections import Counter, defaultdict
 import numpy as np
 
 REPO = os.path.expanduser("~/rizu/SNI-SLAM")
-for p in ("Registration", "Registration/scripts", "Registration/scripts/r49"):
+for p in ("Registration", "Registration/scripts", "Registration/scripts/r49", "Registration/scripts/r61"):
     sys.path.insert(0, os.path.join(REPO, p))
 os.chdir(REPO)
 import r49_run as RR                                            # noqa: E402
@@ -140,7 +140,7 @@ def comp():
     for name in names:
         rows = []
         for t in RR.REAL:
-            d = json.load(open(H + "/r49_data/results/real/full/%s.json" % t))["rows"] if name == "full_P" else json.load(open("%s/comp/%s/%s.json" % (OUT, name, t)))["rows"]
+            d = json.load(open("%s/rerun/parallel_r1/%s.json" % (OUT, t)))["rows"] if name == "full_P" else json.load(open("%s/comp/%s/%s.json" % (OUT, name, t)))["rows"]
             for k in range(10):
                 r = d[str(k)]; b = base[t][str(k)]; P = np.asarray(r["P"]); I = np.eye(4)
                 e, e0 = ev(r["T_est"], P, t), ev(b["T_est"], I, t)
@@ -154,6 +154,9 @@ def comp():
                        "gen_unmatched": sum(x is None for x in mg), "gen_unmatched_none": sum(x is None for x in mg0),
                        "after_unmatched": sum(x is None for x in ma), "top_same": (ma[top] == top0) if ma[top] is not None else False,
                        "db": {st: sb[st] - sb0[st] for st in sb}, "b": sb, "b_none": sb0}
+                if name == "full_P" and "n_prep" not in r:
+                    import r61_run
+                    r = dict(r, n_prep=r61_run.n_prep(t, P))
                 if "n_prep" in r and "n_prep" in b:
                     row["dn_prep"] = r["n_prep"]["total"] - b["n_prep"]["total"]; row["n_prep"] = r["n_prep"]["total"]; row["n_prep_none"] = b["n_prep"]["total"]
                 if row["ok"] != row["ok_none"]:
