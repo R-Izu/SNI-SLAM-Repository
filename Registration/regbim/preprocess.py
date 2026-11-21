@@ -51,13 +51,19 @@ def split_by_label(cloud: LabeledCloud) -> Dict[int, LabeledCloud]:
     return {c: cloud.subset(cloud.labels == c) for c in cloud.present_classes()}
 
 
-def prepare(cloud: LabeledCloud, cfg: Dict) -> LabeledCloud:
+def prepare(cloud: LabeledCloud, cfg: Dict, frame=None) -> LabeledCloud:
     """Standard pipeline prep: ensure normals, then voxel-downsample.
 
     ``voxel_size <= 0`` skips downsampling (density-sensitivity "raw" level).
+    ``frame``（R61 §8-2 の 2、診断のスイッチ、既定 None）：4×4 の変換を与えると、点をその変換で移してから間引き、
+    逆の変換で戻す（間引きの格子の原点と向きを、その座標に固定する）。None なら従来と同じ。
     """
     pp = cfg["preprocess"]
     cloud = estimate_normals(cloud, pp["normal_radius"], pp["normal_max_nn"])
     if float(pp["voxel_size"]) <= 0.0:
         return cloud
-    return voxel_downsample(cloud, pp["voxel_size"])
+    if frame is None:
+        return voxel_downsample(cloud, pp["voxel_size"])
+    from .metrics import transform_cloud, invert_sim3
+    F = np.asarray(frame, dtype=np.float64)
+    return transform_cloud(voxel_downsample(transform_cloud(cloud, F), pp["voxel_size"]), invert_sim3(F))

@@ -17,7 +17,13 @@ comp（§3-3）：P_k を成分に分ける。座標は R55 と同じ RG（SLAM 
 - P_scale = RGᵀ · [I, 0, s] · RG（縮尺だけ。原点まわり）
 - none = 単位行列（摂動なし）
 - 出力：`~/rizu/r61_data/comp/<yaw|xy|tilt|scale|none>/<target>.json`（rows に R49 と同じ欄と、前処理の後の点の数 `n_prep`（クラスごと））
-使い方：python r61_run.py serial <r> ／ parallel <r> [並列数] ／ comp <成分,...> [並列数]
+comp34（§3-4、§8-2 の決定、2026-11-21 追加）：10 並列。出力 `~/rizu/r61_data/comp34/<変種>/<target>.json`
+- xy_min：P_xy、`proposed.plan_correlate.src_grid_origin: min`（source の平面図の格子の原点を点の範囲の最小値に。`plan_correlate.horizontal_candidates`）
+- none_min：摂動なし、同じスイッチ（xy_min の比べる相手）
+- yaw_vframe：P_yaw、`preprocess.src_voxel_frame` = P_yaw⁻¹（source を元の座標に戻して間引き、P_yaw で戻す。`preprocess.prepare` の frame）
+- none_check：摂動なし、スイッチなし（スイッチを足した後のコードで、既定の計算が §3-3 の none の記録とビット一致するかの確認）
+- 1 試行は `run_one(timed=False)` と同じ手順（`clouds`・`config("real", target, "full")`・`proposed`・diag）に、上の config の変更だけを足したもの
+使い方：python r61_run.py serial <r> ／ parallel <r> [並列数] ／ comp <成分,...> [並列数] ／ comp34 <変種,...> [並列数]
 """
 import json, os, sys, time
 from multiprocessing import Pool
@@ -70,9 +76,9 @@ def components(P):
     return c, chk
 
 
-def n_prep(target, P):
+def n_prep(target, P, frame=None):
     src, dst, _ = RR.clouds("real", target); cfg = RR.config("real", target, "full")
-    sp = preprocess.prepare(metrics.transform_cloud(src, P), cfg)
+    sp = preprocess.prepare(metrics.transform_cloud(src, P), cfg, frame=frame)
     return {"total": int(len(sp.points)), "by_class": {int(k): int(v) for k, v in zip(*np.unique(sp.labels, return_counts=True))}}
 
 
@@ -110,6 +116,28 @@ def pjob(a):
     return a, r
 
 
+VARIANTS = {"xy_min": "xy", "none_min": "none", "yaw_vframe": "yaw", "none_check": "none"}
+
+
+def job34(a):
+    import copy
+    from regbim.methods import get_method
+    _, name, target, k = a
+    P0 = RR.perturbations("real", target)[k]; c, _ = components(P0); P = c[VARIANTS[name]]
+    src, dst, _ = RR.clouds("real", target); cfg = copy.deepcopy(RR.config("real", target, "full")); frame = None
+    if name in ("xy_min", "none_min"):
+        cfg.setdefault("proposed", {}).setdefault("plan_correlate", {})["src_grid_origin"] = "min"
+    if name == "yaw_vframe":
+        frame = metrics.invert_sim3(P); cfg["preprocess"] = dict(cfg["preprocess"], src_voxel_frame=frame.tolist())
+    meth = get_method("proposed"); t0 = time.perf_counter()
+    T = meth.register(metrics.transform_cloud(src, P), dst, cfg); dt = time.perf_counter() - t0
+    pd, yd = meth.last_plan_diag, meth.last_yaw_diag
+    diag = {"gen": [x["T_gen"] for x in pd["stage_candidates"]], "short": [x["T_short"] for x in pd["stage_candidates"]],
+            "after_icp": yd["candidate_T"], "scores": yd["candidate_scores"]}
+    return a, {"T_est": np.asarray(T, dtype=np.float64).tolist(), "P": P.tolist(), "time_s": dt, "diag": diag,
+               "n_prep": n_prep(target, P, frame), "P_orig": P0.tolist()}
+
+
 def parallel(jobs, npar):
     have, todo = {}, []
     for a in jobs:
@@ -120,7 +148,7 @@ def parallel(jobs, npar):
             todo.append(a)
     todo.sort(key=lambda a: (a[2], a[1], a[3])); print("todo", len(todo), flush=True); t0 = time.time()
     with Pool(npar) as pool:
-        for i, (a, r) in enumerate(pool.imap_unordered(pjob, todo, chunksize=1)):
+        for i, (a, r) in enumerate(pool.imap_unordered(job34 if todo and todo[0][0] == "comp34" else pjob, todo, chunksize=1)):
             p = path(a[0], a[1], a[2]); have[p]["rows"][str(a[3])] = r; save(p, have[p])
             print("done", i + 1, len(todo), a, "%.0fs" % r["time_s"], "elapsed %.0fs" % (time.time() - t0), flush=True)
 
@@ -136,6 +164,12 @@ def main():
         cs = sys.argv[2].split(","); npar = int(sys.argv[3]) if len(sys.argv) > 3 else 10
         assert all(c in COMPS for c in cs)
         parallel([("comp", c, t, k) for c in cs for t in RR.REAL for k in range(10)], npar)
+    elif mode == "comp34":
+        vs = sys.argv[2].split(","); npar = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+        assert all(v in VARIANTS for v in vs)
+        ks = range(int(sys.argv[4])) if len(sys.argv) > 4 else range(10)
+        tg = RR.REAL if len(sys.argv) <= 5 else sys.argv[5].split(",")
+        parallel([("comp34", v, t, k) for v in vs for t in tg for k in ks], npar)
     elif mode == "decomp_check":
         for t in RR.REAL:
             for k, P in enumerate(RR.perturbations("real", t)):

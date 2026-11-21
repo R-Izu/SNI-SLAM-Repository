@@ -261,7 +261,8 @@ class Proposed(BaseRegistration):
     def register(self, src: LabeledCloud, dst: LabeledCloud, cfg: Dict,
                  tracer: Optional[Tracer] = None) -> np.ndarray:
         with _ins.stage("prep"):
-            src_p = preprocess.prepare(src, cfg)
+            # R61 §8-2 の 2（診断のスイッチ、既定なし）：`preprocess.src_voxel_frame` があれば source の間引きだけをその座標で行う
+            src_p = preprocess.prepare(src, cfg, frame=(cfg.get("preprocess") or {}).get("src_voxel_frame"))
             dst_p = preprocess.prepare(dst, cfg)
         thresh = float(cfg["semantic_icp"]["max_corr_dist"])
         abl = cfg.get("ablation") or {}

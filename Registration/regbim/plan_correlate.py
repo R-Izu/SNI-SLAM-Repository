@@ -126,7 +126,7 @@ def top_peaks(corr: np.ndarray, n_peaks: int, min_sep_cells: int) -> List[Tuple]
 def horizontal_candidates(src_xy_x: np.ndarray, src_xy_y: np.ndarray,
                           dst_xy_x: np.ndarray, dst_xy_y: np.ndarray,
                           cell: float, n_peaks: int,
-                          min_sep_m: float) -> List[Dict]:
+                          min_sep_m: float, src_origin: str = "floor") -> List[Dict]:
     """縮尺を当てた source の壁像と参照の壁像を相関させ、水平位置の候補を返す。
 
     x 法線群と y 法線群の相関を**足してから**ピークを取る。
@@ -137,6 +137,9 @@ def horizontal_candidates(src_xy_x: np.ndarray, src_xy_y: np.ndarray,
     all_src = np.vstack([v for v in (src_xy_x, src_xy_y) if len(v)])
     all_dst = np.vstack([v for v in (dst_xy_x, dst_xy_y) if len(v)])
     o_s = np.floor(all_src.min(axis=0) / cell) * cell
+    if src_origin == "min":
+        # R61 §8-2 の 1（診断のスイッチ、既定 "floor"）：source の格子の原点を、セル幅の倍数に丸めず点の範囲の最小値にする
+        o_s = all_src.min(axis=0)
     o_d = np.floor(all_dst.min(axis=0) / cell) * cell
     sh_s = (int(np.floor((all_src[:, 1].max() - o_s[1]) / cell)) + 1,
             int(np.floor((all_src[:, 0].max() - o_s[0]) / cell)) + 1)
@@ -311,7 +314,8 @@ def generate_candidates(src_pts, src_labels, src_normals,
                                  None if rot_nrm is None else rot_nrm[w_m],
                                  p["wall_axis_tol_deg"])
             hs = horizontal_candidates(sx, sy, dx_xy, dy_xy, p["cell_m"],
-                                       int(p["n_peaks"]), p["peak_sep_m"])
+                                       int(p["n_peaks"]), p["peak_sep_m"],
+                                       src_origin=str(p.get("src_grid_origin", "floor")))
             if not hs:
                 continue
             src_z = {"floor": rot_pts[sl == floor][:, 2] * s,
