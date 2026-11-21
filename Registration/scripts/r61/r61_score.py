@@ -12,6 +12,7 @@ comp（§3-3）：`r61_data/comp/<成分>/` と摂動なし（`comp/none`）。P
 - 候補の照合（指示書 §3-3 の固定の線）：各段階の候補を元の座標に戻し（T P）、摂動なしの候補（T）と、回転の差 ≤ 2° かつ並進の差 ≤ 0.3 m で対応を取る
 - 1：最終の基準内が摂動なしと違う試行の数。2：その試行で (i) gen の候補に対応の取れないものがあるか（数）、(ii) gen はすべて対応が取れ、
   after_icp の 4 候補もすべて対応が取れ、採点の 1 位の候補が摂動なしと別の候補か。3：段階ごとの b（E_Ω 最小）の摂動なしとの差。4：前処理の後の点の数の差
+comp34（§3-4、§8-2、2026-11-21）：`comp34/xy_min` と `comp34/none_min`・`comp/none`、`comp34/yaw_vframe` と `comp/none` を comp と同じ表で比べる。`comp34/none_check` と `comp/none` のビット一致（T_est・diag・n_prep）
 rerun_pairs（§3-2 の追加、2026-11-20）：同じ設定の 3 回どうし（r1 と r2、r1 と r3、r2 と r3）の `T_est` のビット一致の数と、R49 の記録と一致しない試行の段階ごとの差の分布
 出力：`~/rizu/r61_data/score_<s31|rerun|rerun_pairs|comp>.json`
 """
@@ -131,47 +132,73 @@ def stage_eval(r, P, t):
     return res
 
 
-def comp():
-    base = {}
+def compare(name, d_of, base, P0_none=None):
+    """name の各試行（d_of(t) の rows）を base（t → rows、摂動なし）と比べる。§3-3 の表 1〜4 の行を返す"""
+    rows = []
     for t in RR.REAL:
-        base[t] = json.load(open("%s/comp/none/%s.json" % (OUT, t)))["rows"]
+        d = d_of(t)
+        for k in range(10):
+            r = d[str(k)]; b = base[t][str(k)]; P = np.asarray(r["P"]); I = np.eye(4)
+            e, e0 = ev(r["T_est"], P, t), ev(b["T_est"], I, t)
+            g = [np.asarray(T) @ P for T in r["diag"]["gen"]]; g0 = [np.asarray(T) for T in b["diag"]["gen"]]
+            a = [np.asarray(T) @ P for T in r["diag"]["after_icp"]]; a0 = [np.asarray(T) for T in b["diag"]["after_icp"]]
+            mg, mg0 = match(g, g0), match(g0, g)
+            ma = match(a, a0)
+            top, top0 = int(np.argmax(r["diag"]["scores"])), int(np.argmax(b["diag"]["scores"]))
+            sb, sb0 = stage_eval(r, P, t), stage_eval(b, I, t)
+            row = {"target": t, "scan": t.split("__")[0], "k": k, "ok": e["ok"], "ok_none": e0["ok"], "eO": e["eO"], "eO_none": e0["eO"],
+                   "gen_unmatched": sum(x is None for x in mg), "gen_unmatched_none": sum(x is None for x in mg0),
+                   "after_unmatched": sum(x is None for x in ma), "top_same": (ma[top] == top0) if ma[top] is not None else False,
+                   "db": {st: sb[st] - sb0[st] for st in sb}, "b": sb, "b_none": sb0}
+            if name == "full_P" and "n_prep" not in r:
+                import r61_run
+                r = dict(r, n_prep=r61_run.n_prep(t, P))
+            if "n_prep" in r and "n_prep" in b:
+                row["dn_prep"] = r["n_prep"]["total"] - b["n_prep"]["total"]; row["n_prep"] = r["n_prep"]["total"]; row["n_prep_none"] = b["n_prep"]["total"]
+            if row["ok"] != row["ok_none"]:
+                row["why"] = ("gen_changed" if (row["gen_unmatched"] or row["gen_unmatched_none"]) else
+                              ("rank_swapped" if (row["after_unmatched"] == 0 and not row["top_same"]) else "other"))
+            rows.append(row)
+    for scan in sorted(set(r["scan"] for r in rows)) + ["all"]:
+        x = [r for r in rows if scan == "all" or r["scan"] == scan]
+        ch = [r for r in x if r["ok"] != r["ok_none"]]
+        print(name, scan, "ok %d none %d changed %d" % (sum(r["ok"] for r in x), sum(r["ok_none"] for r in x), len(ch)),
+              "why", dict(Counter(r["why"] for r in ch)), "gen_unmatched>0 %d" % sum((r["gen_unmatched"] > 0) for r in x),
+              "db gen med %.3f after med %.3f" % (np.median([r["db"]["gen"] for r in x]), np.median([r["db"]["after_icp"] for r in x])),
+              "dn_prep", (q([r.get("dn_prep") for r in x]) or {}).get("median"))
+    return rows
+
+
+def rows_of(path_fmt):
+    return lambda t: json.load(open(path_fmt % t))["rows"]
+
+
+def comp():
+    base = {t: rows_of("%s/comp/none/%%s.json" % OUT)(t) for t in RR.REAL}
     res = {}
     names = ["full_P"] + [c for c in ("yaw", "xy", "tilt", "scale") if os.path.isdir("%s/comp/%s" % (OUT, c))]
     for name in names:
-        rows = []
-        for t in RR.REAL:
-            d = json.load(open("%s/rerun/parallel_r1/%s.json" % (OUT, t)))["rows"] if name == "full_P" else json.load(open("%s/comp/%s/%s.json" % (OUT, name, t)))["rows"]
-            for k in range(10):
-                r = d[str(k)]; b = base[t][str(k)]; P = np.asarray(r["P"]); I = np.eye(4)
-                e, e0 = ev(r["T_est"], P, t), ev(b["T_est"], I, t)
-                g = [np.asarray(T) @ P for T in r["diag"]["gen"]]; g0 = [np.asarray(T) for T in b["diag"]["gen"]]
-                a = [np.asarray(T) @ P for T in r["diag"]["after_icp"]]; a0 = [np.asarray(T) for T in b["diag"]["after_icp"]]
-                mg, mg0 = match(g, g0), match(g0, g)
-                ma = match(a, a0)
-                top, top0 = int(np.argmax(r["diag"]["scores"])), int(np.argmax(b["diag"]["scores"]))
-                sb, sb0 = stage_eval(r, P, t), stage_eval(b, I, t)
-                row = {"target": t, "scan": t.split("__")[0], "k": k, "ok": e["ok"], "ok_none": e0["ok"], "eO": e["eO"], "eO_none": e0["eO"],
-                       "gen_unmatched": sum(x is None for x in mg), "gen_unmatched_none": sum(x is None for x in mg0),
-                       "after_unmatched": sum(x is None for x in ma), "top_same": (ma[top] == top0) if ma[top] is not None else False,
-                       "db": {st: sb[st] - sb0[st] for st in sb}, "b": sb, "b_none": sb0}
-                if name == "full_P" and "n_prep" not in r:
-                    import r61_run
-                    r = dict(r, n_prep=r61_run.n_prep(t, P))
-                if "n_prep" in r and "n_prep" in b:
-                    row["dn_prep"] = r["n_prep"]["total"] - b["n_prep"]["total"]; row["n_prep"] = r["n_prep"]["total"]; row["n_prep_none"] = b["n_prep"]["total"]
-                if row["ok"] != row["ok_none"]:
-                    row["why"] = ("gen_changed" if (row["gen_unmatched"] or row["gen_unmatched_none"]) else
-                                  ("rank_swapped" if (row["after_unmatched"] == 0 and not row["top_same"]) else "other"))
-                rows.append(row)
-        res[name] = rows
-        for scan in sorted(set(r["scan"] for r in rows)) + ["all"]:
-            x = [r for r in rows if scan == "all" or r["scan"] == scan]
-            ch = [r for r in x if r["ok"] != r["ok_none"]]
-            print(name, scan, "ok %d none %d changed %d" % (sum(r["ok"] for r in x), sum(r["ok_none"] for r in x), len(ch)),
-                  "why", dict(Counter(r["why"] for r in ch)), "gen_unmatched>0 %d" % sum((r["gen_unmatched"] > 0) for r in x),
-                  "db gen med %.3f after med %.3f" % (np.median([r["db"]["gen"] for r in x]), np.median([r["db"]["after_icp"] for r in x])),
-                  "dn_prep", (q([r.get("dn_prep") for r in x]) or {}).get("median"))
+        res[name] = compare(name, rows_of("%s/rerun/parallel_r1/%%s.json" % OUT) if name == "full_P" else rows_of("%s/comp/%s/%%s.json" % (OUT, name)), base)
     json.dump(res, open(OUT + "/score_comp.json", "w"), indent=1, default=float)
+
+
+def comp34():
+    """§3-4（§8-2）：xy_min と none_min、xy_min と none（既定）、yaw_vframe と none（既定）。none_check と none のビット一致"""
+    none = {t: rows_of("%s/comp/none/%%s.json" % OUT)(t) for t in RR.REAL}
+    none_min = {t: rows_of("%s/comp34/none_min/%%s.json" % OUT)(t) for t in RR.REAL}
+    res = {"xy_min_vs_none_min": compare("xy_min_vs_none_min", rows_of("%s/comp34/xy_min/%%s.json" % OUT), none_min),
+           "xy_min_vs_none": compare("xy_min_vs_none", rows_of("%s/comp34/xy_min/%%s.json" % OUT), none),
+           "none_min_vs_none": compare("none_min_vs_none", rows_of("%s/comp34/none_min/%%s.json" % OUT), none),
+           "yaw_vframe_vs_none": compare("yaw_vframe_vs_none", rows_of("%s/comp34/yaw_vframe/%%s.json" % OUT), none)}
+    n = eq = 0
+    for t in RR.REAL:
+        a = rows_of("%s/comp34/none_check/%%s.json" % OUT)(t); b = none[t]
+        for k in range(10):
+            n += 1; x, y = a[str(k)], b[str(k)]
+            eq += bool(np.array_equal(np.asarray(x["T_est"]), np.asarray(y["T_est"])) and x["n_prep"] == y["n_prep"]
+                       and all(np.array_equal(np.asarray(x["diag"][s]), np.asarray(y["diag"][s])) for s in ("gen", "short", "after_icp", "scores")))
+    res["none_check"] = {"n": n, "bit_equal": eq}; print("none_check bit_equal", eq, "/", n)
+    json.dump(res, open(OUT + "/score_comp34.json", "w"), indent=1, default=float)
 
 
 def rerun_pairs():
@@ -200,4 +227,4 @@ def rerun_pairs():
 
 
 if __name__ == "__main__":
-    {"s31": s31, "rerun": rerun, "rerun_pairs": rerun_pairs, "comp": comp}[sys.argv[1]]()
+    {"s31": s31, "rerun": rerun, "rerun_pairs": rerun_pairs, "comp": comp, "comp34": comp34}[sys.argv[1]]()
